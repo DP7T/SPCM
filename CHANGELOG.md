@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.10.0 (2026-10-15) - pre-release, in testing
+- **Point sweeps** on one spot: power, bias, or bias × power (bias outer). Powers set with the
+  2 mV SINE OUT step closest to the target; N readings per point with mean and spread;
+  live linear and log-log plots with the fitted exponent α; bias–power map; .h5 + CSV + PNG
+- **Line scans**: draw a line on a map or on the camera image, scan along it at any angle;
+  with a bias list you get a distance × bias image
+- **Camera calibration**: one button; afterwards double-click the camera to move the laser,
+  and draw scan frames and lines on the live camera image
+- Lists accept `1:100:*2` (multiply each step) and always include the stop value
+- `tools/selftest.py`: tests everything in simulation; runs on GitHub for every change
+
 ## 0.9.0 (2026-10-14) - in testing
 First version in the repository. Includes:
 - Settings: your own `config.yaml` is created on first start from `config.default.yaml`

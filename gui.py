@@ -84,7 +84,7 @@ class MapPanel(QtWidgets.QWidget):
         grp = QtWidgets.QButtonGroup(self)
         for key, label, tip in (("auto", "Auto", "Fit the colour scale to the data"),
                                 ("sym", "Symmetric ±", "Centre the scale on zero: −max … +max"),
-                                ("manual", "Manual", "Use the min/max typed on the right")):
+                                ("manual", "Manual", "Use the Min/Max typed below")):
             b = QtWidgets.QRadioButton(label)
             b.setToolTip(tip)
             grp.addButton(b)
@@ -92,7 +92,10 @@ class MapPanel(QtWidgets.QWidget):
             row.addWidget(b)
             self.mode_btns[key] = b
         self.mode_btns["auto"].setChecked(True)
-        row.addSpacing(10)
+        row.addStretch(1)
+        lay.addLayout(row)
+        row = QtWidgets.QHBoxLayout()          # second line: limits + line cut
+        row.setContentsMargins(6, 0, 6, 4)
         self.min_e, self.max_e = QtWidgets.QLineEdit(), QtWidgets.QLineEdit()
         for lab, e in (("Min", self.min_e), ("Max", self.max_e)):
             e.setFixedWidth(95)
@@ -342,6 +345,34 @@ class AutofocusWorker(QtCore.QObject):
                 pass
 
 
+class CalibrationWorker(QtCore.QObject):
+    status = QtCore.Signal(str)
+    done = QtCore.Signal(object)      # Calibration, or error text
+
+    def __init__(self, stage, cam, step_um, laser_px):
+        super().__init__()
+        self.args = (stage, cam, step_um, laser_px)
+        self._stop = False
+
+    def stop(self):
+        self._stop = True
+
+    def run(self):
+        from calibration import calibrate
+        stage, cam, step, laser = self.args
+        try:
+            stage.set_joystick(False)
+            self.done.emit(calibrate(stage, cam, step, laser, status=self.status.emit,
+                                     stop=lambda: self._stop))
+        except Exception as e:
+            self.done.emit(str(e))
+        finally:
+            try:
+                stage.set_joystick(True)
+            except Exception:
+                pass
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, hw, config, config_path=None, restart=None):
         super().__init__()
@@ -384,6 +415,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return lay
 
         scan_lay = page("Scan")
+        sweep_lay = page("Point sweep")
         inst_lay = page("Instruments")
         left = scan_lay
 
@@ -659,6 +691,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.pm_poller.start()
 
         inst_lay.addStretch(1)
+        self.build_sweep_tab(sweep_lay)
         left = scan_lay
         g = QtWidgets.QGroupBox("Save")
         f = QtWidgets.QFormLayout(g)
@@ -722,6 +755,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.use_frame_btn.clicked.connect(self.use_frame)
         bar.addWidget(self.frame_btn)
         bar.addWidget(self.use_frame_btn)
+        bar.addSpacing(12)
+        self.line_rois = []
+        self.line_btn = QtWidgets.QPushButton("Draw line")
+        self.line_btn.setCheckable(True)
+        self.line_btn.setToolTip("Show a line on the maps. Drag its two ends where you "
+                                 "want, then press 'Scan this line'. Step, timing, bias "
+                                 "list and laser power come from the Scan and "
+                                 "Instruments tabs.")
+        self.line_btn.toggled.connect(self.toggle_line)
+        self.use_line_btn = QtWidgets.QPushButton("Scan this line")
+        self.use_line_btn.setEnabled(False)
+        self.use_line_btn.clicked.connect(self.scan_line)
+        bar.addWidget(self.line_btn)
+        bar.addWidget(self.use_line_btn)
         bar.addStretch(1)
         right.addLayout(bar)
 
@@ -738,16 +785,29 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.cam is not None:
             self.tabs.addTab(self.build_camera_tab(), "Camera")
         self.tabs.addTab(self.build_experiment_tab(), "Experiment notes")
+        from sweep_view import SweepView
+        self.sweep_view = SweepView()
+        self.tabs.addTab(self.sweep_view, "Point sweep")
+        from sweep_view import LineView
+        self.line_view = LineView()
+        self.tabs.addTab(self.line_view, "Line scan")
+        self.line_data = None
+        self.sweep_data = None
+        self.side_tabs.currentChanged.connect(self._side_tab_changed)
+        self.tabs.currentChanged.connect(self._right_tab_changed)
         for p in (self.pc_panel, self.r_panel):
             p.clicked.connect(self.goto)
         hint = QtWidgets.QLabel("Double-click a map to move the laser there (when idle). "
                                 "Drag the dashed line for a line cut. "
                                 "Drag the colour bar to set the scale.")
+        hint.setWordWrap(True)
         hint.setStyleSheet("color:gray")
         right.addWidget(hint)
 
         for w in (self.ch_pc, self.ch_r, self.map_sel):
             w.currentIndexChanged.connect(self.redraw)
+        self.ch_pc.currentIndexChanged.connect(self._redraw_sweep)
+        self.ch_pc.currentIndexChanged.connect(self._redraw_line)
         for w in (self.xs_, self.ys_, self.step, self.settle, self.extra):
             w.valueChanged.connect(self.update_eta)
         self.bias_on.toggled.connect(self.update_eta)
@@ -1064,9 +1124,11 @@ class MainWindow(QtWidgets.QMainWindow):
         exp = self.config.get("experiment", {}) or {}
         w = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(w)
-        lay.addWidget(QtWidgets.QLabel(
+        lab = QtWidgets.QLabel(
             "Saved with every scan. Write units with the value (e.g. 4.2 K, 1e-6 mbar, "
-            "45°). Values are remembered for the next scan; edit what changed."))
+            "45°). Values are remembered for the next scan; edit what changed.")
+        lab.setWordWrap(True)
+        lay.addWidget(lab)
         self.exp_table = QtWidgets.QTableWidget(0, 2)
         self.exp_table.setHorizontalHeaderLabels(["Quantity", "Value"])
         self.exp_table.horizontalHeader().setStretchLastSection(True)
@@ -1129,6 +1191,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def build_camera_tab(self):
         w = QtWidgets.QWidget()
+        self.cam_tab = w
         lay = QtWidgets.QVBoxLayout(w)
         bar = QtWidgets.QHBoxLayout()
         cc0 = self.config.get("camera", {}) or {}
@@ -1159,6 +1222,51 @@ class MainWindow(QtWidgets.QMainWindow):
         bar.addWidget(self.cam_info)
         bar.addStretch(1)
         lay.addLayout(bar)
+        # calibration + drawing on the camera image
+        from calibration import Calibration
+        self.cal = Calibration.from_dict(cc0.get("calibration"))
+        bar2 = QtWidgets.QHBoxLayout()
+        self.cal_btn = QtWidgets.QPushButton("Calibrate camera")
+        self.cal_btn.setToolTip(
+            "Moves the stage a few µm in x and in y and measures how the image moves, "
+            "so the program knows which stage position every camera pixel shows.\n"
+            "Before: put the cyan cross on the laser spot, focus, and go to a place "
+            "with clear structure (an electrode or flake corner). Takes ~10 s.\n"
+            "Redo it after changing the objective.")
+        self.cal_btn.clicked.connect(self.calibrate_camera)
+        bar2.addWidget(self.cal_btn)
+        bar2.addWidget(QtWidgets.QLabel("move (µm)"))
+        self.cal_step = SISpinBox(1e-6, "µm")
+        self.cal_step.setRange(0.2, 200)
+        self.cal_step.setDecimals(1)
+        self.cal_step.setValue(float(cc0.get("calibration_move_um", 5.0)))
+        self.cal_step.setToolTip("How far the stage moves for the calibration. The image "
+                                 "should move by roughly 5-20 % of its width: about 5 µm "
+                                 "with a 50-100× objective, 20 µm with 10×.")
+        bar2.addWidget(self.cal_step)
+        self.cal_lab = QtWidgets.QLabel()
+        self.cal_lab.setWordWrap(True)
+        self.cal_lab.setMinimumWidth(120)
+        self.cal_lab.setStyleSheet("color:gray")
+        bar2.addWidget(self.cal_lab)
+        bar2.addSpacing(15)
+        self.cam_rois, self.cam_line = [], []
+        self.cam_frame_btn = QtWidgets.QPushButton("Draw scan frame")
+        self.cam_frame_btn.setCheckable(True)
+        self.cam_frame_btn.toggled.connect(self.toggle_cam_frame)
+        self.cam_use_frame = QtWidgets.QPushButton("Scan this frame")
+        self.cam_use_frame.clicked.connect(self.use_cam_frame)
+        self.cam_line_btn = QtWidgets.QPushButton("Draw line")
+        self.cam_line_btn.setCheckable(True)
+        self.cam_line_btn.toggled.connect(self.toggle_cam_line)
+        self.cam_use_line = QtWidgets.QPushButton("Scan this line")
+        self.cam_use_line.clicked.connect(self.use_cam_line)
+        for b_ in (self.cam_frame_btn, self.cam_use_frame, self.cam_line_btn,
+                   self.cam_use_line):
+            bar2.addWidget(b_)
+        bar2.addStretch(1)
+        lay.addLayout(bar2)
+        self._show_cal()
         glw = pg.GraphicsLayoutWidget()
         self.cam_plot = glw.addPlot()
         self.cam_plot.setAspectLocked(True)
@@ -1180,7 +1288,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cam_cross.sigPositionChangeFinished.connect(self._cross_moved)
         lay.addWidget(glw, 1)
         hint = QtWidgets.QLabel("Drag the cyan cross onto the laser spot once; it marks "
-                                "where the scan pixel is.")
+                                "where the scan pixel is. After 'Calibrate camera': "
+                                "double-click the image to move the laser there, and draw "
+                                "scan frames and lines on it.")
+        hint.setWordWrap(True)
         hint.setStyleSheet("color:gray")
         lay.addWidget(hint)
         self.cam_timer = QtCore.QTimer(self)
@@ -1190,7 +1301,174 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cam_flipx.toggled.connect(self._cam_flip)
         self.cam_flipy.toggled.connect(self._cam_flip)
         self.map_sel.currentIndexChanged.connect(self.update_camera)
+        self.cam_plot.scene().sigMouseClicked.connect(self._cam_clicked)
+        self._cam_stage = None              # stage position the overlays belong to
+        self.cam_track = QtCore.QTimer(self)
+        self.cam_track.timeout.connect(self._track_overlays)
+        self.cam_track.start(1000)
         return w
+
+    # -- camera calibration and drawing on the camera image --
+    def _show_cal(self):
+        ok = self.cal is not None
+        self.cal_lab.setText(("calibrated: " + self.cal.describe()) if ok
+                             else "not calibrated")
+        for b_ in (self.cam_frame_btn, self.cam_line_btn):
+            b_.setEnabled(ok)
+            b_.setToolTip("" if ok else "Calibrate the camera first")
+        self.cam_use_frame.setEnabled(ok and self.cam_frame_btn.isChecked())
+        self.cam_use_line.setEnabled(ok and self.cam_line_btn.isChecked())
+
+    def _busy(self):
+        return (self.thread is not None or getattr(self, "af_thread", None) is not None
+                or getattr(self, "cal_thread", None) is not None)
+
+    def calibrate_camera(self):
+        if getattr(self, "cal_thread", None) is not None:
+            self.cal_worker.stop()
+            return
+        if self._busy():
+            self.error("Wait until the scan / autofocus has finished.")
+            return
+        if not getattr(self, "_cross_placed", False):
+            self.error("Drag the cyan cross onto the laser spot first.")
+            return
+        p = self.cam_cross.pos()
+        self._save_setting("camera", "calibration_move_um", self.cal_step.value())
+        self.cal_worker = CalibrationWorker(self.hw.stage, self.cam, self.cal_step.value(),
+                                            (p.x(), p.y()))
+        self.cal_thread = QtCore.QThread()
+        self.cal_worker.moveToThread(self.cal_thread)
+        self.cal_thread.started.connect(self.cal_worker.run)
+        self.cal_worker.status.connect(self.statusBar().showMessage)
+        self.cal_worker.done.connect(self._cal_done)
+        self.cal_btn.setText("Cancel calibration")
+        self.start_btn.setEnabled(False)
+        self.cal_thread.start()
+
+    def _cal_done(self, result):
+        self.cal_thread.quit()
+        self.cal_thread.wait()
+        self.cal_thread = self.cal_worker = None
+        self.cal_btn.setText("Calibrate camera")
+        self.start_btn.setEnabled(True)
+        if isinstance(result, str):
+            self.error("Camera calibration did not work:\n\n" + result)
+            return
+        self.cal = result
+        self.config.setdefault("camera", {})["calibration"] = result.to_dict()
+        self._save_setting("camera", "calibration", result.to_dict())
+        self._cam_stage = None
+        self._show_cal()
+        self.toast("Camera calibrated: " + result.describe(), "info")
+
+    def _laser_px(self):
+        p = self.cam_cross.pos()
+        return (p.x(), p.y())
+
+    def _cam_clicked(self, ev):
+        """Double-click on the camera image: move the laser to that spot."""
+        if not ev.double() or self.cal is None:
+            return
+        if self._busy():
+            return
+        p = self.cam_plot.vb.mapSceneToView(ev.scenePos())
+        try:
+            cur = self.hw.stage.position()
+        except Exception as e:
+            self.error(f"Could not read the stage:\n{e}")
+            return
+        x, y = self.cal.px_to_stage(p.x(), p.y(), cur, self._laser_px())
+        if np.hypot(x - cur[0], y - cur[1]) > 2000:
+            return
+        u, v = self.stage_to_user(x, y) if self.origin_xy else (x, y)
+        self.goto_stage(x, y, label=f"({u:.2f}, {v:.2f}) µm (clicked on the camera)")
+        self._track_overlays(force=True)
+
+    def _track_overlays(self, force=False):
+        """Keep frames/lines drawn on the camera on the same spot of the sample
+        when the stage moves (the camera image moves with the stage)."""
+        if self.cal is None or not (self.cam_rois or self.cam_line):
+            return
+        if not force and (self.tabs.currentWidget() is not self.cam_tab or self._busy()):
+            return
+        try:
+            cur = np.array(self.hw.stage.position())
+        except Exception:
+            return
+        if self._cam_stage is not None:
+            d = cur - self._cam_stage
+            if np.hypot(*d) > 0.02:
+                shift = -(self.cal.B @ d)
+                for r in self.cam_rois + self.cam_line:
+                    r.setPos(r.pos() + QtCore.QPointF(*shift), finish=False)
+        self._cam_stage = cur
+
+    def _cam_size(self):
+        img = self.cam_img.image
+        if img is None:
+            return 480, 360
+        return img.shape[1], img.shape[0]
+
+    def toggle_cam_frame(self, on):
+        if on and not self.cam_rois:
+            w, h = self._cam_size()
+            cx, cy = self._laser_px()
+            roi = pg.ROI((cx - w / 6, cy - h / 6), (w / 3, h / 3),
+                         pen=pg.mkPen("#00e5ff", width=2),
+                         hoverPen=pg.mkPen("#ffeb3b", width=2))
+            roi.addScaleHandle([1, 1], [0, 0])
+            roi.addScaleHandle([0, 0], [1, 1])
+            roi.addScaleHandle([1, 0.5], [0, 0.5])
+            roi.addScaleHandle([0.5, 1], [0.5, 0])
+            roi.addRotateHandle([1, 0], [0.5, 0.5])
+            self.cam_plot.addItem(roi)
+            self.cam_rois.append(roi)
+            self._track_overlays(force=True)
+        for r in self.cam_rois:
+            r.setVisible(on)
+        self.cam_use_frame.setEnabled(on)
+
+    def toggle_cam_line(self, on):
+        if on and not self.cam_line:
+            w, _ = self._cam_size()
+            cx, cy = self._laser_px()
+            roi = pg.LineSegmentROI([(cx - w / 6, cy), (cx + w / 6, cy)],
+                                    pen=pg.mkPen("#ffeb3b", width=2),
+                                    hoverPen=pg.mkPen("#00e5ff", width=2))
+            self.cam_plot.addItem(roi)
+            self.cam_line.append(roi)
+            self._track_overlays(force=True)
+        for r in self.cam_line:
+            r.setVisible(on)
+        self.cam_use_line.setEnabled(on)
+
+    def _cam_to_stage(self, pts):
+        cur = self.hw.stage.position()
+        return [self.cal.px_to_stage(x, y, cur, self._laser_px()) for x, y in pts]
+
+    def use_cam_frame(self):
+        if not self.cam_rois or self.cal is None or self._busy():
+            return
+        if self.origin_xy is None:
+            self.error("Set the origin first (Scan tab).")
+            return
+        try:
+            self._apply_frame(*self._cam_to_stage(self._roi_corners(self.cam_rois[0])))
+        except Exception as e:
+            self.error(f"Could not use the frame:\n{e}")
+
+    def use_cam_line(self):
+        if not self.cam_line or self.cal is None or self._busy():
+            return
+        r = self.cam_line[0]
+        pts = [r.mapToParent(h.pos()) for h in r.getHandles()]
+        try:
+            a, b = self._cam_to_stage([(p.x(), p.y()) for p in pts])
+        except Exception as e:
+            self.error(f"Could not read the stage:\n{e}")
+            return
+        self.start_line(a, b)
 
     def _cam_flip(self, *_):
         fx, fy = self.cam_flipx.isChecked(), self.cam_flipy.isChecked()
@@ -1214,7 +1492,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._cross_placed = True
 
     def update_camera(self, *_):
-        if self.tabs.currentIndex() != 1:
+        if self.tabs.currentWidget() is not getattr(self, "cam_tab", None):
             return
         if self.cam_live.isChecked():
             try:
@@ -1430,13 +1708,23 @@ class MainWindow(QtWidgets.QMainWindow):
         """Fill the scan settings from the frame drawn on the map."""
         if not self.rois or self.data is None:
             return
-        r = self.rois[0]
-        (u0, v0), (w, h), a = (r.pos().x(), r.pos().y()), (r.size()[0], r.size()[1]), r.angle()
-        ca, sa = np.cos(np.radians(a)), np.sin(np.radians(a))
         d = self.data
-        p0 = np.array(self.stage_to_user(*self.map_to_stage(d, u0, v0)))
-        p1 = np.array(self.stage_to_user(*self.map_to_stage(d, u0 + w * ca, v0 + w * sa)))
-        p2 = np.array(self.stage_to_user(*self.map_to_stage(d, u0 - h * sa, v0 + h * ca)))
+        corners = self._roi_corners(self.rois[0])
+        self._apply_frame(*[self.map_to_stage(d, u, v) for u, v in corners])
+
+    @staticmethod
+    def _roi_corners(r):
+        """Corner at the ROI's origin, the end of its width side and the end of
+        its height side, in the coordinates of the plot it sits on."""
+        w, h = r.size()[0], r.size()[1]
+        return [(p.x(), p.y()) for p in (r.mapToParent(QtCore.QPointF(0, 0)),
+                                         r.mapToParent(QtCore.QPointF(w, 0)),
+                                         r.mapToParent(QtCore.QPointF(0, h)))]
+
+    def _apply_frame(self, s0, s1, s2):
+        """Scan tab <- a frame given by three stage positions: start corner,
+        end of the first line, start of the last line."""
+        p0, p1, p2 = (np.array(self.stage_to_user(*p)) for p in (s0, s1, s2))
         ex, ey = p1 - p0, p2 - p0
         ydir = 1 if (ex[0] * ey[1] - ex[1] * ey[0]) >= 0 else -1
         ang = float(np.degrees(np.arctan2(ex[1], ex[0])))
@@ -1487,10 +1775,431 @@ class MainWindow(QtWidgets.QMainWindow):
         ix, iy = np.argsort(u), np.argsort(v)
         return u[ix], v[iy], ix, iy
 
+    # ---------------------------------------------------------------- line scans
+    def toggle_line(self, on):
+        if on and self.data is None:
+            self.line_btn.setChecked(False)
+            self.error("Open or measure a map first, then draw the line on it.")
+            return
+        if on and not self.line_rois:
+            u, v, _, _ = self._view_axes(self.data)
+            a = (u[0] + (u[-1] - u[0]) * 0.25, v[0] + (v[-1] - v[0]) * 0.5)
+            b = (u[0] + (u[-1] - u[0]) * 0.75, v[0] + (v[-1] - v[0]) * 0.5)
+            for p in (self.pc_panel, self.r_panel):
+                roi = pg.LineSegmentROI([a, b], pen=pg.mkPen("#ffeb3b", width=2),
+                                        hoverPen=pg.mkPen("#00e5ff", width=2))
+                p.plot.addItem(roi)
+                self.line_rois.append(roi)
+            r1, r2 = self.line_rois
+
+            def sync(src, dst):
+                if self._roi_sync:
+                    return
+                self._roi_sync = True
+                dst.setState(src.getState())
+                self._roi_sync = False
+                self._line_info()
+            r1.sigRegionChanged.connect(lambda r: sync(r1, r2))
+            r2.sigRegionChanged.connect(lambda r: sync(r2, r1))
+            self._line_info()
+        for r in self.line_rois:
+            r.setVisible(on)
+        self.use_line_btn.setEnabled(on)
+
+    def _line_ends(self):
+        """Ends of the drawn line in the map's axes (u, v)."""
+        r = self.line_rois[0]
+        pts = [r.mapToParent(h.pos()) for h in r.getHandles()]
+        return [(p.x(), p.y()) for p in pts]
+
+    def _line_info(self):
+        if not self.line_rois:
+            return
+        (u0, v0), (u1, v1) = self._line_ends()
+        n = int(round(np.hypot(u1 - u0, v1 - v0) / (self.step.value() / 1000))) + 1
+        self.statusBar().showMessage(
+            f"Line ({u0:.2f}, {v0:.2f}) → ({u1:.2f}, {v1:.2f}) µm, "
+            f"{np.hypot(u1 - u0, v1 - v0):.2f} µm, {n} points at the current step "
+            "(drag the ends or the whole line)")
+
+    def scan_line(self):
+        if not self.line_rois or self.data is None:
+            return
+        (u0, v0), (u1, v1) = self._line_ends()
+        self.start_line(self.map_to_stage(self.data, u0, v0),
+                        self.map_to_stage(self.data, u1, v1))
+
+    def start_line(self, start_stage, end_stage):
+        """Scan along a line between two stage positions (µm)."""
+        if self.thread is not None or getattr(self, "af_thread", None) is not None:
+            return
+        import linescan
+        try:
+            base = self.settings()
+            s = linescan.line_settings(
+                start_stage, end_stage, base.step,
+                biases=None if base.biases == [None] else base.biases,
+                origin=self.origin_xy, flips=(self.sx < 0, self.sy < 0),
+                settle_tc=base.settle_tc, settle_auto=base.settle_auto,
+                backlash_um=base.backlash_um, extra_settle_ms=base.extra_settle_ms,
+                sample=base.sample, notes=base.notes, conditions=base.conditions,
+                target_power_uW=base.target_power_uW, power_tol_pct=base.power_tol_pct,
+                amp_mode=base.amp_mode, amp_value=base.amp_value,
+                lockin_unit=base.lockin_unit, signal_as=base.signal_as)
+            px, py = self.hw.stage.position()
+            dist = float(np.hypot(start_stage[0] - px, start_stage[1] - py))
+        except Exception as e:
+            self.error(str(e))
+            return
+        if dist > 500 and QtWidgets.QMessageBox.question(
+                self, "SPCM", f"The line starts {dist / 1000:.2f} mm away from where the "
+                "stage is now. Move there and scan?") != \
+                QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        self.refresh_lockins()
+        self.remember_experiment()
+        self.worker = ScanWorker(self.hw, s, self.folder.text() or "data",
+                                 self.config.get("power_lock", {}) or {})
+        self.worker.path = self.worker.path.replace(".h5", "_line.h5")
+        self.line_data = self.worker.data
+        self.line_data.path = self.worker.path
+        self.tabs.setCurrentWidget(self.line_view)
+        self._redraw_line()
+        self.thread = QtCore.QThread()
+        self.worker.moveToThread(self.thread)
+        self.thread.started.connect(self.worker.run)
+        self.worker.pixel.connect(self._line_pixel)
+        self.worker.status.connect(self.statusBar().showMessage)
+        self.worker.progress.connect(self.on_progress)
+        self.worker.finished.connect(self.on_line_finished)
+        self.worker.failed.connect(self.on_line_failed)
+        self.worker.notify.connect(self.toast)
+        self.start_btn.setEnabled(False)
+        self.use_line_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.discard_btn.setEnabled(True)
+        self._discard = False
+        self._last_line_draw = 0
+        self.thread.start()
+
+    def _line_pixel(self, *_):
+        now = time.time()
+        if now - self._last_line_draw > 0.15:
+            self._last_line_draw = now
+            self._redraw_line()
+        elif not getattr(self, "_line_queued", False):
+            self._line_queued = True
+            QtCore.QTimer.singleShot(200, self._flush_line)
+
+    def _flush_line(self):
+        self._line_queued = False
+        self._last_line_draw = time.time()
+        self._redraw_line()
+
+    def _redraw_line(self, *_):
+        if getattr(self, "line_data", None) is None:
+            return
+        try:
+            self.line_view.set_data(self.line_data, self.ch_pc.currentIndex())
+        except Exception as e:
+            self.statusBar().showMessage(f"Line plot: {e}")
+
+    def on_line_finished(self, path):
+        done = self.line_data.completed
+        self._cleanup()
+        self.use_line_btn.setEnabled(self.line_btn.isChecked())
+        if getattr(self, "_discard", False):
+            self._delete_scan_files(path)
+            self.statusBar().showMessage("Line scan stopped and discarded (nothing saved)")
+            return
+        try:
+            from scanner import update_experiment
+            update_experiment(path, self.conditions(), self.exp_notes.toPlainText())
+        except Exception as e:
+            self.statusBar().showMessage(f"Could not update notes: {e}")
+        try:
+            import linescan
+            self.line_data = load(path)
+            linescan.export_csv(self.line_data)
+            linescan.save_all(self.line_data)
+            self._redraw_line()
+        except Exception as e:
+            self.statusBar().showMessage(f"CSV/figure export failed: {e}")
+            return
+        self.statusBar().showMessage(("Line scan finished" if done else "Line scan stopped")
+                                     + f" - saved {os.path.abspath(path)} + PNG and CSV")
+
+    def on_line_failed(self, tb):
+        self._cleanup()
+        self.use_line_btn.setEnabled(self.line_btn.isChecked())
+        if getattr(self, "_discard", False):
+            self._delete_scan_files(self.line_data.path)
+            self.statusBar().showMessage("Line scan stopped and discarded (nothing saved)")
+            return
+        self._redraw_line()
+        self.error("Line scan aborted (what was measured is saved):\n\n" + tb)
+
+    # ---------------------------------------------------------------- point sweeps
+    def build_sweep_tab(self, lay):
+        sw = self.config.get("sweep", {}) or {}
+        g = QtWidgets.QGroupBox("Where")
+        f = QtWidgets.QFormLayout(g)
+        row = QtWidgets.QHBoxLayout()
+        self.sw_pos = QtWidgets.QLabel("-")
+        self.sw_pos.setWordWrap(True)
+        rd = QtWidgets.QPushButton("Read")
+        rd.setToolTip("Read where the stage is now")
+        rd.clicked.connect(self._show_spot)
+        row.addWidget(self.sw_pos, 1)
+        row.addWidget(rd)
+        f.addRow("Laser at", row)
+        hint = QtWidgets.QLabel("The sweep runs where the laser is now. Double-click a map "
+                                "to move the laser to a spot (or use the joystick).")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:gray")
+        f.addRow(hint)
+        lay.addWidget(g)
+
+        g = QtWidgets.QGroupBox("Sweep")
+        f = QtWidgets.QFormLayout(g)
+        self.sw_kind = QtWidgets.QComboBox()
+        self.sw_kind.addItem("Power", "power")
+        self.sw_kind.addItem("Bias", "bias")
+        self.sw_kind.addItem("Bias × power", "bias_power")
+        self.sw_kind.setToolTip("Bias × power: for every bias (outer loop) the whole "
+                                "power list (inner loop)")
+        self.sw_kind.setCurrentIndex(max(self.sw_kind.findData(sw.get("kind", "power")), 0))
+        f.addRow("Sweep", self.sw_kind)
+        self.sw_powers = QtWidgets.QLineEdit(str(sw.get("powers", "1:50:5")))
+        self.sw_powers.setToolTip(
+            "Power on the sample, in µW (meter reading ÷ ratio).\n"
+            "  1, 2, 5, 10        a list\n"
+            "  1:50:5             1, 6, 11 … 46, 50  (start:stop:step; stop always included)\n"
+            "  1:100:*2           1, 2, 4, 8 … 64, 100  (×2 each time: even on a log scale)\n"
+            "Prefixes are absolute: 500n = 0.5 µW, 1m = 1000 µW.\n"
+            "Each power is set with the SINE OUT step (2 mV) that comes closest; "
+            "the power actually reached is recorded.")
+        f.addRow("Powers (µW)", self.sw_powers)
+        self.sw_biases = QtWidgets.QLineEdit(str(sw.get("biases", "-1:1:0.25")))
+        self.sw_biases.setToolTip("e.g. 0, 0.5, 1   or   -1:1:250m  (start:stop:step)")
+        f.addRow("Biases (V)", self.sw_biases)
+        self.sw_navg = QtWidgets.QSpinBox()
+        self.sw_navg.setRange(1, 1000)
+        self.sw_navg.setValue(int(sw.get("n_avg", 10)))
+        self.sw_navg.setToolTip("Readings per point, about one time constant apart. "
+                                "The mean is saved, and the spread (standard deviation) "
+                                "as the error bar.")
+        f.addRow("Readings per point", self.sw_navg)
+        self.sw_restore = QtWidgets.QCheckBox("Put the SINE OUT (laser power) back afterwards")
+        self.sw_restore.setChecked(bool(sw.get("restore_power", True)))
+        f.addRow(self.sw_restore)
+        self.sw_note = QtWidgets.QLabel()
+        self.sw_note.setWordWrap(True)
+        self.sw_note.setStyleSheet("color:#c62828")
+        f.addRow(self.sw_note)
+        self.sw_eta = QtWidgets.QLabel("-")
+        f.addRow("Est. time", self.sw_eta)
+        lay.addWidget(g)
+        expl = QtWidgets.QLabel(
+            "Each point: set the power and/or bias → wait until the lock-ins have "
+            "settled (Timing, Scan tab) → take the readings. The plots appear in the "
+            "'Point sweep' tab on the right. Saved like maps: .h5, CSV and a PNG.")
+        expl.setWordWrap(True)
+        expl.setStyleSheet("color:gray")
+        lay.addWidget(expl)
+        lay.addStretch(1)
+        self.sw_kind.currentIndexChanged.connect(self._sweep_kind_changed)
+        for w in (self.sw_powers, self.sw_biases):
+            w.editingFinished.connect(self.update_sweep_eta)
+        self.sw_navg.valueChanged.connect(self.update_sweep_eta)
+        self._sweep_kind_changed()
+
+    def _sweep_kind_changed(self, *_):
+        k = self.sw_kind.currentData()
+        self.sw_powers.setEnabled(k in ("power", "bias_power"))
+        self.sw_biases.setEnabled(k in ("bias", "bias_power"))
+        self.sw_restore.setEnabled(k in ("power", "bias_power"))
+        notes = []
+        if k in ("power", "bias_power") and self.pm is None:
+            notes.append("Power sweeps need the power meter (Hardware → Settings).")
+        if k in ("bias", "bias_power") and not (
+                self.has_bias and self.amp_mode.currentData() == "sr570"):
+            notes.append("Bias sweeps need the SR570 current preamp: choose it in "
+                         "Instruments → Photocurrent amplifier, and as bias source "
+                         "in Hardware → Settings.")
+        self.sw_note.setText("\n".join(notes))
+        self.sw_note.setVisible(bool(notes))
+        self.update_sweep_eta()
+
+    def _side_tab_changed(self, i):
+        self.start_btn.setText("Start sweep" if i == 1 else "Start scan")
+        if i == 1:
+            self._show_spot()
+            self._sweep_kind_changed()
+
+    def _right_tab_changed(self, *_):
+        self.update_camera()
+
+    def _show_spot(self):
+        if self.thread is not None or self.origin_xy is None:
+            return
+        try:
+            X, Y = self.hw.stage.position()
+            u, v = self.stage_to_user(X, Y)
+            self.sw_pos.setText(f"({u:.2f}, {v:.2f}) µm from the origin")
+        except Exception as e:
+            self.sw_pos.setText("?")
+            self.statusBar().showMessage(f"Could not read the stage: {e}")
+
+    def _sweep_settings(self):
+        from scanner import parse_list
+        from sweeps import SweepSettings
+        k = self.sw_kind.currentData()
+        powers, biases = [], []
+        if k in ("power", "bias_power"):
+            if self.pm is None:
+                raise ValueError("Power sweeps need the power meter. Turn it on in "
+                                 "Hardware → Settings.")
+            powers = parse_list(self.sw_powers.text(), 1e-6)
+            if not powers:
+                raise ValueError("The power list is empty.")
+            if min(powers) <= 0:
+                raise ValueError("Powers must be above 0.")
+        if k in ("bias", "bias_power"):
+            if not (self.has_bias and self.amp_mode.currentData() == "sr570"):
+                raise ValueError("Bias sweeps need the SR570 current preamp (Instruments "
+                                 "tab) and the SR570 as bias source (Hardware → Settings).")
+            biases = parse_bias_list(self.sw_biases.text())
+            if not biases:
+                raise ValueError("The bias list is empty.")
+            lim = self.hw.bias.max_abs_V
+            bad = [b for b in biases if abs(b) > lim]
+            if bad:
+                raise ValueError(f"Bias {bad[0]} V exceeds the limit of {lim} V.")
+        if self.origin_xy is None:
+            raise ValueError("Set the origin first (Scan tab).")
+        X, Y = self.hw.stage.position()
+        u, v = self.stage_to_user(X, Y)
+        lc = self.config.get("power_lock", {}) or {}
+        return SweepSettings(
+            kind=k, powers_uW=powers, biases=biases, n_avg=self.sw_navg.value(),
+            max_amp_V=float(lc.get("max_amplitude_V", 5.0)),
+            laser_lockin=lc.get("lockin", "photocurrent"),
+            restore_power=self.sw_restore.isChecked(),
+            x_stage=X, y_stage=Y, u=u, v=v,
+            settle_auto=self.settle_auto.isChecked(), settle_tc=self.settle.value(),
+            extra_settle_ms=self.extra.value(),
+            amp_mode=self.amp_mode.currentData(), amp_value=self._amp_value(),
+            lockin_unit=self._lockin_unit(), signal_as="peak",
+            sample=self.sample.text() or "sample", notes=self.exp_notes.toPlainText(),
+            conditions=self.conditions())
+
+    def update_sweep_eta(self, *_):
+        from scanner import parse_list, pixel_wait
+        try:
+            k = self.sw_kind.currentData()
+            npw = len(parse_list(self.sw_powers.text(), 1e-6)) if k != "bias" else 1
+            nb = len(parse_bias_list(self.sw_biases.text())) if k != "power" else 1
+        except Exception:
+            self.sw_eta.setText("check the lists")
+            return
+        taus = list(getattr(self, "_tau", {0: 0.1}).values()) or [0.1]
+        poles = getattr(self, "_poles_now", [4] * len(taus))
+        s = ScanSettings(settle_auto=self.settle_auto.isChecked(),
+                         settle_tc=self.settle.value(), extra_settle_ms=self.extra.value())
+        wait = pixel_wait(s, taus, (list(poles) + [4] * len(taus))[:len(taus)])
+        per = wait + self.sw_navg.value() * max(max(taus), 0.03) + (1.5 if k != "bias" else 0)
+        self.sw_eta.setText(f"{nb * npw} points ≈ {nb * npw * per / 60:.1f} min")
+
+    def _remember_sweep(self):
+        vals = {"kind": self.sw_kind.currentData(), "powers": self.sw_powers.text(),
+                "biases": self.sw_biases.text(), "n_avg": self.sw_navg.value(),
+                "restore_power": self.sw_restore.isChecked()}
+        self.config["sweep"] = vals
+        for k, v in vals.items():
+            self._save_setting("sweep", k, v)
+
+    def start_sweep(self):
+        try:
+            s = self._sweep_settings()
+        except Exception as e:
+            self.error(str(e))
+            return
+        from sweeps import SweepWorker
+        self.refresh_lockins()
+        self.remember_experiment()
+        self._remember_sweep()
+        self._show_spot()
+        self.worker = SweepWorker(self.hw, s, self.folder.text() or "data")
+        self.sweep_data = self.worker.data
+        self.sweep_data.path = self.worker.path
+        self.tabs.setCurrentWidget(self.sweep_view)
+        self._redraw_sweep()
+        self.thread = QtCore.QThread()
+        self.worker.moveToThread(self.thread)
+        self.thread.started.connect(self.worker.run)
+        self.worker.point.connect(lambda *_: self._redraw_sweep())
+        self.worker.status.connect(self.statusBar().showMessage)
+        self.worker.progress.connect(self.on_progress)
+        self.worker.finished.connect(self.on_sweep_finished)
+        self.worker.failed.connect(self.on_sweep_failed)
+        self.worker.notify.connect(self.toast)
+        self.start_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.discard_btn.setEnabled(True)
+        self._discard = False
+        self.thread.start()
+
+    def _redraw_sweep(self, *_):
+        if getattr(self, "sweep_data", None) is None:
+            return
+        try:
+            self.sweep_view.set_data(self.sweep_data, self.ch_pc.currentIndex())
+        except Exception as e:
+            self.statusBar().showMessage(f"Sweep plot: {e}")
+
+    def on_sweep_finished(self, path):
+        done = self.sweep_data.completed
+        self._cleanup()
+        if getattr(self, "_discard", False):
+            self._delete_scan_files(path)
+            self.statusBar().showMessage("Sweep stopped and discarded (nothing saved)")
+            return
+        try:
+            from scanner import update_experiment
+            update_experiment(path, self.conditions(), self.exp_notes.toPlainText())
+        except Exception as e:
+            self.statusBar().showMessage(f"Could not update notes: {e}")
+        self.remember_experiment()
+        try:
+            from sweeps import load_sweep, export_csv, save_all
+            self.sweep_data = load_sweep(path)
+            export_csv(self.sweep_data)
+            save_all(self.sweep_data)
+            self._redraw_sweep()
+        except Exception as e:
+            self.statusBar().showMessage(f"CSV/figure export failed: {e}")
+            return
+        self.statusBar().showMessage(("Sweep finished" if done else "Sweep stopped") +
+                                     f" - saved {os.path.abspath(path)} + PNG and CSV")
+        self.toast("Sweep finished" if done else "Sweep stopped", "info")
+
+    def on_sweep_failed(self, tb):
+        self._cleanup()
+        if getattr(self, "_discard", False):
+            self._delete_scan_files(self.sweep_data.path)
+            self.statusBar().showMessage("Sweep stopped and discarded (nothing saved)")
+            return
+        self._redraw_sweep()
+        self.error("Sweep aborted (what was measured is saved):\n\n" + tb)
+
     # ----------------------------------------------------------------
     def start(self):
         if getattr(self, "af_thread", None) is not None:
             self.error("Wait for the autofocus to finish.")
+            return
+        if self.side_tabs.currentIndex() == 1:
+            self.start_sweep()
             return
         try:
             s = self.settings()
@@ -1590,7 +2299,7 @@ class MainWindow(QtWidgets.QMainWindow):
         import glob
         import shutil
         base = os.path.splitext(path)[0]
-        for f in [path] + glob.glob(base + "_map*.png"):
+        for f in [path, base + ".png"] + glob.glob(base + "_map*.png"):
             try:
                 os.remove(f)
             except OSError:
@@ -1599,11 +2308,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _setup_views(self):
         d = self.data
-        for r in self.rois:
+        for r in self.rois + self.line_rois:
             r.scene() and r.scene().removeItem(r)
-        self.rois = []
+        self.rois, self.line_rois = [], []
         if self.frame_btn.isChecked():
             self.frame_btn.setChecked(False)
+        if self.line_btn.isChecked():
+            self.line_btn.setChecked(False)
         u, v, _, _ = self._view_axes(d)
         for p in (self.pc_panel, self.r_panel):
             p.set_axes(u, v)
@@ -1717,6 +2428,33 @@ class MainWindow(QtWidgets.QMainWindow):
     def save_figure(self):
         """Figure like the publication layout, using the channel and colour
         scale currently shown (Manual limits are kept; otherwise symmetric)."""
+        if self.tabs.currentWidget() is self.line_view and self.line_data is not None:
+            base = os.path.splitext(getattr(self.line_data, "path", "") or "line")[0]
+            path, _ = QtWidgets.QFileDialog.getSaveFileName(
+                self, "Save figure", base + ".png",
+                "PNG image (*.png);;PDF (*.pdf);;SVG (*.svg)")
+            if path:
+                try:
+                    import linescan
+                    linescan.save_figure(self.line_data, path,
+                                         channel=min(self.ch_pc.currentIndex(), 2))
+                    self.statusBar().showMessage(f"Figure saved: {path}")
+                except Exception as e:
+                    self.error(f"Could not save the figure:\n{e}")
+            return
+        if self.tabs.currentWidget() is self.sweep_view and self.sweep_data is not None:
+            base = os.path.splitext(self.sweep_data.path or "sweep")[0]
+            path, _ = QtWidgets.QFileDialog.getSaveFileName(
+                self, "Save figure", base + ".png",
+                "PNG image (*.png);;PDF (*.pdf);;SVG (*.svg)")
+            if path:
+                try:
+                    from sweeps import save_figure
+                    save_figure(self.sweep_data, path, channel=min(self.ch_pc.currentIndex(), 2))
+                    self.statusBar().showMessage(f"Figure saved: {path}")
+                except Exception as e:
+                    self.error(f"Could not save the figure:\n{e}")
+            return
         if self.data is None:
             self.error("No scan to save yet.")
             return
@@ -1741,6 +2479,25 @@ class MainWindow(QtWidgets.QMainWindow):
             self.error(f"Could not save the figure:\n{e}")
 
     def export_csv(self):
+        if self.tabs.currentWidget() is self.line_view and self.line_data is not None \
+                and getattr(self.line_data, "path", None):
+            try:
+                import linescan
+                out = linescan.export_csv(self.line_data)
+                self.statusBar().showMessage(f"CSV files written to {out}")
+                self.open_path(out)
+            except Exception as e:
+                self.error(f"CSV export failed:\n{e}")
+            return
+        if self.tabs.currentWidget() is self.sweep_view and self.sweep_data is not None:
+            try:
+                from sweeps import export_csv
+                out = export_csv(self.sweep_data)
+                self.statusBar().showMessage(f"CSV files written to {out}")
+                self.open_path(out)
+            except Exception as e:
+                self.error(f"CSV export failed:\n{e}")
+            return
         if self.data is None or not getattr(self.data, "path", None):
             self.error("Open a saved scan first (File → Open saved scan…).")
             return
@@ -1757,7 +2514,21 @@ class MainWindow(QtWidgets.QMainWindow):
             self, "Open scan", self.folder.text(), "HDF5 (*.h5)")
         if path:
             try:
-                self.data = load(path)
+                from sweeps import is_sweep_file, load_sweep
+                if is_sweep_file(path):
+                    self.sweep_data = load_sweep(path)
+                    self._redraw_sweep()
+                    self.tabs.setCurrentWidget(self.sweep_view)
+                    self.statusBar().showMessage(f"Loaded {path}")
+                    return
+                d = load(path)
+                if getattr(d.settings, "scan_type", "map") == "line":
+                    self.line_data = d
+                    self._redraw_line()
+                    self.tabs.setCurrentWidget(self.line_view)
+                    self.statusBar().showMessage(f"Loaded {path}")
+                    return
+                self.data = d
                 self._setup_views()
                 self.statusBar().showMessage(f"Loaded {path}")
             except Exception as e:

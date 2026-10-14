@@ -45,6 +45,7 @@ jobs:
           Copy-Item config.default.yaml dist/SPCM/
           Copy-Item README.md dist/SPCM/
           Copy-Item CHANGELOG.md dist/SPCM/
+          Copy-Item LICENSE dist/SPCM/
           Set-Content "dist/SPCM/SPCM (simulation).bat" '@start "" "%~dp0SPCM.exe" --sim'
           Compress-Archive -Path dist/SPCM -DestinationPath "SPCM-$name-windows.zip"
           "ZIP=SPCM-$name-windows.zip" | Out-File -Append $env:GITHUB_ENV

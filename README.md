@@ -67,7 +67,7 @@ The left side has two tabs:
 - **Go to start position** moves the stage back to that point at any time. The stage also returns there by itself when a scan finishes or is stopped.
 - **Wait at each pixel:** *Auto* (the default) waits until both lock-ins have settled to 99 %. It uses each one's τ **and filter slope** from the front panel: 5 τ at 6 dB, 7 τ at 12 dB, 9 τ at 18 dB and 10 τ at 24 dB/oct. Untick Auto to set the number of τ yourself. Waiting too short makes each pixel still show part of the previous one, which looks like a zig-zag between lines.
 - **Serpentine** is off by default, so every line runs in the same direction. Each line's first pixel is also approached from the scan direction, which removes stage backlash. Turn serpentine on only if you need the speed and see no zig-zag.
-- **Photocurrent amplifier:** tell the program what sits in front of the photocurrent lock-in. The map shows the converted values, and the data file keeps both the raw lock-in values (`photocurrent`) and the converted ones (`photocurrent_calibrated`, with the formula and unit attached):
+- **Photocurrent amplifier:** tell the program what sits in front of the photocurrent lock-in. The map shows the converted values, and the data file keeps both the converted values (`photocurrent_X` …, with the formula and unit attached) and the raw lock-in readings (`raw/`):
   - *Lock-in only*: the lock-in value.
   - *SR570 current preamp*: value × sensitivity, in amperes. Choose the same sensitivity as on the SR570 front panel.
   - *SR560 voltage preamp*: value ÷ gain, in volts. Pick the gain from the list, matching the SR560 front panel.
@@ -104,8 +104,47 @@ The left side has two tabs:
   - Drag the round handle to rotate it.
 
   Then press **Scan this frame**: the start position, size, direction and angle are filled in for you. Check the step and press Start scan. It also works on a scan you opened from a file, as long as the origin is the same spot.
-- Double-click a map to park the laser on that spot, for example for I–V or power dependence measured by hand.
+- Double-click a map to park the laser on that spot, for example for a point sweep.
 - If the photocurrent lock-in overloads, a warning appears in the status bar.
+
+## Point sweeps (power, bias, or both) on one spot
+
+1. Park the laser on the spot: double-click a map, double-click the calibrated camera image, or use the joystick.
+2. Open the **Point sweep** tab on the left and choose the sweep:
+   - **Power:** a list of powers **on the sample** in µW, e.g. `1:50:5` (1, 6, 11 … 46, 50), `1:100:*2` (1, 2, 4 … 64, 100: evenly spaced on a log scale) or `1, 2, 5, 10`. Each power is set with the lock-in SINE OUT step (2 mV) that comes closest, checked with the power meter, and the power actually reached is recorded.
+   - **Bias:** a list of biases through the SR570, like the bias maps.
+   - **Bias × power:** for every bias (outer loop), the whole power list (inner loop).
+3. **Readings per point** (10 by default): after the lock-ins have settled (the same wait as in Timing), this many readings are taken about one time constant apart. The mean is saved, and their standard deviation is the error bar.
+4. Press **Start sweep** (the Start button changes its name on this tab). Stop & save / Stop & discard work as for maps.
+
+The **Point sweep** tab on the right shows the result live:
+- signal vs power (or bias), with error bars;
+- for power sweeps, a **log-log plot** with a fitted power law |S| = A·P^α and the value of α (one per bias);
+- for bias × power, one curve per bias (with a legend) and a **bias–power map** coloured by the photocurrent or photovoltage.
+
+Afterwards the SINE OUT goes back to where it was (untick *Put the laser power back afterwards* if you don't want that) and the bias ramps back to 0 V. You get `…_power_sweep.h5` (or `_bias_sweep`, `_bias_power_sweep`), a PNG with the same plots, and a `_csv` folder with `sweep.csv` (one row per point, every channel with its spread) and, for bias × power, `photocurrent_X_matrix.csv`.
+
+## Line scans
+
+1. Press **Draw line** above the maps. A yellow line appears on both maps; drag its ends (or the whole line) where you want it. The status bar shows its length and the number of points.
+2. Press **Scan this line**. The laser steps along the line at any angle, using the **Step**, **Timing**, **Bias** list and laser-power setting from the Scan and Instruments tabs.
+3. The **Line scan** tab on the right shows the signal and the reflection vs the distance along the line, one curve per bias. With a bias list you also get the **distance × bias image**.
+
+You can draw the line on the camera image too, once the camera is calibrated. Line scans are saved as `…_line.h5` (the same layout as maps, with 1-row images plus `distance_um` and the x, y of every point), a PNG, and `_csv/line.csv`.
+
+## Camera calibration
+
+Once calibrated, the program knows which stage position every camera pixel shows. Then you can:
+- **double-click the camera image** to move the laser to that spot;
+- **draw a scan frame** or **a line** on the live camera image, and press *Scan this frame* or *Scan this line*. The drawings stay on the same spot of the sample when the stage moves.
+
+To calibrate (once, and again after changing the objective or moving the camera):
+1. Focus, and put the **cyan cross on the laser spot**.
+2. Go to a place with clear structure in x **and** y, such as the corner of an electrode or a flake.
+3. Set **move (µm)** so the image moves by roughly 5–20 % of its width: about 5 µm with a 50–100× objective, 20 µm with 10×.
+4. Press **Calibrate camera**. The stage moves a few times in x and in y (about 10 s) and comes back. The result appears next to the button, for example *120 nm per pixel, rotated 0.3°*, and is saved.
+
+If the image couldn't be matched (out of focus, no structure, move too small or too large), you get a message and the old calibration stays.
 
 ## Power meter (PM100USB) and camera (CS165CU)
 
@@ -116,7 +155,7 @@ The laser power is read at the **start and end of every map** and saved (in µW,
 In the window:
 - **Laser power** is always shown live, including between scans. The large number is the **power on the sample**: the meter reading divided by the **Meter / sample ratio** (for example 3.18). The raw meter reading is shown below it. The ratio is remembered, and both powers are saved with every map and every line.
 - **Range:** the power meter uses a **fixed range** (1 mW by default) so that its gain doesn't change during a measurement and the readings stay linear. Pick the smallest range above your laser power from the *Range* list. Your choice is remembered. If the power goes above the range, the reading turns red with **OVER RANGE**. The saved data records the range and an `over_range` flag. *Auto* is still available, for example while you are adjusting the laser.
-- The **Camera** tab shows a live view with an exposure setting. Drag the cyan cross onto the laser spot once to mark it. Camera pictures are not saved with the scans.
+- The **Camera** tab shows a live view with an exposure setting. Drag the cyan cross onto the laser spot once to mark it. Camera pictures are not saved with the scans. See *Camera calibration* for clicking and drawing on the image.
 
 **Setting the laser power.** In the power box, enter **Target on sample (µW)** and a **Tolerance** (± 1 % by default):
 - Tick **Set the laser power before each scan**. When you press Start, the stage goes to the scan's start position. The lock-in's **SINE OUT amplitude** is then adjusted step by step until the power on the sample (meter ÷ ratio) is within the tolerance, and only then does the scan begin. You get a notification with the result.
@@ -132,7 +171,7 @@ In the window:
 
 **CS165CU setup (once):**
 1. Install **ThorCam**. It comes with the camera drivers and the *Scientific Camera Interfaces* folder.
-2. Run **Install SPCM.bat** (again). It finds ThorCam's `Scientific_Camera_Interfaces.zip` and installs the camera package by itself. Look for **"Camera package installed."** in its output.
+2. Nothing else to install: SPCM (also SPCM.exe) finds the camera package inside the ThorCam installation by itself the first time the camera is used.
 3. Tick the camera in **Settings**.
 4. **Close ThorCam before starting the program.** Only one program can use the camera at a time.
 
@@ -141,7 +180,7 @@ In the window:
 
 Every scan gives you:
 - **`…_map0.png`**: a ready-made figure for each map. On the left is the photocurrent or photovoltage map (blue–white–red, symmetric around zero, with a colour bar in nA, µV, etc.); on the right is the reflection map in grey. The title follows your setup: **Photocurrent** with the SR570, **Photovoltage** with the SR560, and with the lock-in alone it depends on its input (current input → photocurrent, A or A−B → photovoltage). **File → Save figure of shown map…** saves the map currently shown as PNG, PDF or SVG. It uses your Manual colour limits if you set them.
-- **`YYYYMMDD_HHMMSS_sample.h5`**: everything in one file (all maps, raw and converted, settings, notes, power log, camera images). Open it with:
+- **`YYYYMMDD_HHMMSS_sample.h5`**: everything in one file (all maps, raw and converted, settings, notes, power log). Open it with:
   - SPCM itself: **File → Open saved scan…**
   - **HDFView**: free from the HDF Group; double-click any dataset to see it as a table or image.
   - **Origin**: *Data → Import → HDF5*.
@@ -170,7 +209,6 @@ Every image in the file is a plain 2-D array (rows = y, columns = x), in the sam
   photocurrent_theta_deg
   reflection_X / _Y / _R, reflection_theta_deg
   raw/                      lock-in readings exactly as measured (rms)
-  camera_start, camera_end  camera pictures (if the camera is on)
 /power_log                  laser power after every line: map, line, time_s,
                             power_uW, sine_amplitude_V, power_on_sample_uW
 ```
@@ -182,10 +220,22 @@ pc = f["map0/photocurrent_X"][()]      # 2-D image, in A (SR570) or V (SR560)
 x, y = f["map0/x_um"][()], f["map0/y_um"][()]
 ```
 
-SPCM still opens files saved by earlier versions.
+SPCM still opens files saved by earlier versions. Point sweeps have their own simple layout: 2-D datasets `[bias, power]` such as `photocurrent_X`, `photocurrent_X_std`, `power_on_sample_uW`, plus `bias_V`, `power_set_uW` and the fitted `fit_alpha`.
 
 ## Check these on your hardware
 
 - **Tango commands** (`instruments.py`, `TangoStage`): the program uses `!moa`, `?pos`, `?statusaxis`, `!dim 1 1` (µm), `!joy`, `!a` and `!autostatus 0`, at 57600 baud. Compare these with the instruction set for your firmware. If your controller runs in LEP/ASI compatibility mode, switch it back to the native Tango command set.
 - **Scan direction:** if the image comes out mirrored relative to the camera, swap the x and y signs in `TangoStage.move_to`/`position`.
 - **Speed:** a pixel takes about the wait plus ~20–40 ms for the move and reads. If the stage rings after small steps, raise **Extra wait**.
+
+## Disclaimer
+
+This program was made for my own needs, based on my own experience. I make no claims about it
+compared with any other programs, and I have no knowledge of whether other systems or programs,
+which may serve larger or smaller purposes, are better or worse.
+
+## How it was built
+
+This app was built step by step with Claude (an AI assistant), using plain-language requests.
+See **[HOW_IT_WAS_BUILT.md](HOW_IT_WAS_BUILT.md)** for a summary of every request and what it added.
+To continue developing it with an AI assistant, start a new chat by giving it **[AGENTS.md](AGENTS.md)**.

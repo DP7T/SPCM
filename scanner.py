@@ -94,6 +94,7 @@ class ScanSettings:
     #   "square" x pi/sqrt(2) (on-off height of a square-wave/chopped signal)
     signal_as: str = "peak"
     lockin_unit: str = "V"          # "A" when the SR830 current input is used
+    scan_type: str = "map"          # "map", or "line" (one row along a drawn line)
 
     def axes(self):
         nx = int(round(self.x_size / self.step)) + 1
@@ -174,23 +175,52 @@ def pc_scale(settings):
     return base, u, f"raw{mult} (lock-in only) = {label}"
 
 
-def parse_bias_list(text):
+def parse_list(text, scale=1.0):
     """'0, 0.5, 1'  or  '-1:1:0.5' (start:stop:step, inclusive)  or mixed.
-    Numbers may use SI prefixes: '-500m:500m:100m'."""
+    '1:100:*2' multiplies by 2 each time (1, 2, 4 ... 64, 100) - handy for
+    power sweeps on a log scale. Numbers may use SI prefixes ('-500m:500m:100m');
+    scale = the field's unit, as for parse_number."""
     out = []
     for part in text.replace(";", ",").split(","):
         part = part.strip()
         if not part:
             continue
         if ":" in part:
-            a, b, s = (parse_number(p) for p in part.split(":"))
+            pieces = part.split(":")
+            if len(pieces) != 3:
+                raise ValueError(f"Use start:stop:step, not '{part}'")
+            a, b = parse_number(pieces[0], scale), parse_number(pieces[1], scale)
+            st = pieces[2].strip()
+            if st[:1] in ("*", "x", "×"):
+                f = float(parse_number(st[1:]))
+                if f <= 1 or a <= 0 or b <= 0:
+                    raise ValueError("For '*factor' use a factor above 1 and "
+                                     "positive start and stop")
+                lo, hi = min(a, b), max(a, b)
+                vals = [lo]
+                while vals[-1] * f < hi * (1 - 1e-9):
+                    vals.append(vals[-1] * f)
+                if vals[-1] < hi * (1 - 1e-9):
+                    vals.append(hi)
+                out.extend((np.round(vals if a <= b else vals[::-1], 9)).tolist())
+                continue
+            s = parse_number(st, scale)
             if s == 0:
                 raise ValueError("Step can't be 0")
-            n = int(round(abs(b - a) / abs(s))) + 1
-            out.extend(np.round(np.linspace(a, b, n), 6).tolist())
+            s = abs(s) if b >= a else -abs(s)
+            n = int(np.floor((b - a) / s + 1e-9)) + 1
+            vals = a + s * np.arange(n)
+            if abs(vals[-1] - b) > 1e-9 * max(abs(s), 1e-30) * 1e3:
+                vals = np.append(vals, b)          # the stop value is always included
+            out.extend(np.round(vals, 9).tolist())
         else:
-            out.append(parse_number(part))
+            out.append(parse_number(part, scale))
     return out
+
+
+def parse_bias_list(text):
+    """Bias values in V (see parse_list)."""
+    return parse_list(text, 1.0)
 
 
 class ScanData:
@@ -231,9 +261,13 @@ class ScanData:
         ux = (-1 if s.flip_x else 1) * (self.xs - ox) + 0.0
         vy = (-1 if s.flip_y else 1) * (self.ys - oy) + 0.0
         ix, iy = np.argsort(ux), np.argsort(vy)
+        line = getattr(s, "scan_type", "map") == "line"
+        if line:                         # a line keeps its order: start -> end
+            ix, iy = np.arange(len(self.xs)), np.arange(len(self.ys))
         view = np.ix_(iy, ix)
         with h5py.File(path, "w") as f:
             f.attrs["format"] = "SPCM v2 (one group per map)"
+            f.attrs["scan_type"] = "line" if line else "map"
             f.attrs["sample"] = s.sample
             f.attrs["signal"] = kind
             f.attrs["started"] = self.started
@@ -259,6 +293,14 @@ class ScanData:
                 g["x_um"], g["y_um"] = ux[ix], vy[iy]
                 g["x_stage_um"], g["y_stage_um"] = self.xs[ix], self.ys[iy]
                 g.attrs["angle_deg"] = getattr(s, "angle_deg", 0.0)
+                if line:
+                    X, Y = s.rotate_xy(self.xs, np.full(len(self.xs), self.ys[0]))
+                    g["distance_um"] = self.xs - self.xs[0]
+                    g["line_x_um"] = (-1 if s.flip_x else 1) * (X - ox) + 0.0
+                    g["line_y_um"] = (-1 if s.flip_y else 1) * (Y - oy) + 0.0
+                    g["line_x_stage_um"], g["line_y_stage_um"] = X, Y
+                    g.attrs["note"] = ("line scan: images have 1 row; columns follow "
+                                       "the line from start to end (distance_um)")
                 if getattr(s, "angle_deg", 0.0):
                     XX, YY = np.meshgrid(self.xs[ix], self.ys[iy])
                     RX, RY = s.rotate_xy(XX, YY)
@@ -538,6 +580,23 @@ def set_laser_power(pm, lockin, target_W, tol_pct=1.0, max_amp=5.0,
                     "message": f"Laser power not reached: {p * 1e6:.2f} µW at the maximum "
                                f"sine amplitude ({max_amp:g} V)."}
     _, p, amp = best
+    if not tol_pct:
+        # "closest possible": also try the neighbouring 2 mV steps, keep the best
+        for nb in (amp - 0.002, amp + 0.002):
+            if stop() or not (0.004 <= nb <= max_amp):
+                continue
+            a = lockin.set_sine_amplitude(nb)
+            time.sleep(settle)
+            q = read()
+            if abs(q / target_W - 1) < abs(p / target_W - 1):
+                p, amp = q, a
+        lockin.set_sine_amplitude(amp)
+        time.sleep(settle)
+        return {"ok": True, "power_uW": p * 1e6, "target_uW": target_W * 1e6,
+                "amplitude_V": amp,
+                "message": f"Laser power set: {p * 1e6:.3g} µW on sample (target "
+                           f"{target_W * 1e6:.3g} µW, {(p / target_W - 1) * 100:+.1f} %, "
+                           f"sine {amp:.3f} V)"}
     lockin.set_sine_amplitude(amp)
     return {"ok": abs(p / target_W - 1) * 100 <= tol_pct, "power_uW": p * 1e6,
             "target_uW": target_W * 1e6, "amplitude_V": amp,

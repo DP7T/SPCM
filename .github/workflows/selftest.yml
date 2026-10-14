@@ -1,0 +1,52 @@
+name: Self-test (simulation)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  selftest:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install libraries
+        run: python -m pip install -r requirements.txt
+      - name: Run the self-test (simulated hardware, window off-screen)
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONIOENCODING: utf-8
+          PYTHONUNBUFFERED: "1"
+        shell: bash
+        run: |
+          mkdir -p selftest_out
+          python tools/selftest.py selftest_out 2>&1 | tee selftest_out/selftest_log.txt
+          exit ${PIPESTATUS[0]}
+      - name: Keep the figures and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selftest-output
+          path: |
+            selftest_out/*.png
+            selftest_out/*_csv/**
+          retention-days: 14
+      - name: Publish the results to the selftest-results branch (for review)
+        if: always()
+        shell: bash
+        run: |
+          cd selftest_out
+          rm -rf .git
+          git init -q -b selftest-results
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          find . -name "*.h5" -delete
+          git add -A
+          git commit -qm "Self-test results for ${GITHUB_SHA::7}"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" selftest-results

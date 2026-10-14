@@ -1,0 +1,124 @@
+# Guide for continuing SPCM development (for AI assistants and developers)
+
+Read this before changing the code. It describes the app, how it is organized, and the decisions the
+user has already made. Do not undo these decisions without asking. For the history of the requests, see
+[HOW_IT_WAS_BUILT.md](HOW_IT_WAS_BUILT.md). For the user-facing manual, see [README.md](README.md).
+
+## What it is
+
+A Windows desktop program (Python 3.10+, PyQt5 + pyqtgraph) that controls a scanning photocurrent
+microscope:
+- **Stage:** Märzhäuser Tango Desktop, with x/y and optional z (native serial command set).
+- **Lock-ins:** two SR830 over GPIB, one for photocurrent/photovoltage and one for reflection.
+- **Bias:** from an SR570 (RS-232, listen-only), an SR830 AUX OUT, a Keithley 24xx, or none.
+- **Optional:** a PM100USB power meter (VISA SCPI, or the TLPM DLL as fallback) and a Thorlabs CS165CU camera (thorlabs_tsi_sdk).
+
+The user is a physicist who runs the app on a lab PC and is not a programmer. They test each version on
+the real hardware and report back with screenshots. Write in plain language for them. Keep the GUI simple.
+
+## Files
+
+| file | contents |
+|---|---|
+| `main.py` | entry point: `--sim`, `--list`, theme, error hook (`spcm_error.log`), first-run and connect-failure dialogs, restart |
+| `appinfo.py` | `__version__`, `app_dir()` (works both from source and as the frozen exe) |
+| `instruments.py` | `TangoStage`, `SR830`, bias sources (`SR570Bias`, `LockinAuxBias`, `Keithley2400`, `NoBias`), simulators (`SimWorld`, `SimStage`, `SimSR830`, `SimBias`), `connect()` |
+| `accessories.py` | `PM100USB`, `PM100TLPM`, `ThorCamera`, `SimCamera`, `SimPM100`, `ensure_thorlabs_sdk()` (finds the camera package inside the ThorCam install), `connect_accessories()` |
+| `scanner.py` | `ScanSettings`, signal conversion (`pc_scale`, `signal_kind`), settling (`pixel_wait`), `ScanData` (HDF5 save/load, CSV export), `SafeStage`, `set_laser_power`, `ScanWorker` (QThread; step and fly modes, bias loop, power log) |
+| `gui.py` | `MainWindow`, `MapPanel`, toasts and notifications, power poller, camera view, frame and line drawing (maps and camera), calibration button, point-sweep tab |
+| `sweeps.py` | single-point sweeps: `SweepSettings`, `SweepData` (save/load/CSV/figure, power-law fit), `SweepWorker` |
+| `linescan.py` | line scans: `line_settings()` builds a 1-row rotated `ScanSettings` (`scan_type="line"`) run by the normal `ScanWorker`; CSV and figure |
+| `sweep_view.py` | live plots: `SweepView` (point sweeps), `LineView` (line scans) |
+| `calibration.py` | camera ↔ stage calibration (`Calibration`, `calibrate()`, phase-correlation `image_shift()`) |
+| `tools/selftest.py` | tests everything in simulation (also the window, off-screen, with screenshots) |
+| `settings_dialog.py` | hardware settings window; writes `config.yaml` |
+| `numparse.py` | SI-prefix number parsing and the `SISpinBox` class |
+| `figures.py` | publication-style PNG (matplotlib Agg) |
+| `autofocus.py` | z sweep that maximizes the camera sharpness |
+| `config.default.yaml` | default settings. `config.yaml` is the user's copy, created on the first start. It is git-ignored and never overwritten. |
+| `Install SPCM.bat`, `tools/setup.ps1` | installs Python and requirements, pip-installs the camera package, creates shortcuts |
+| `.github/workflows/build-windows.yml` | PyInstaller onedir build of `SPCM.exe`, attached to GitHub releases |
+| `.github/workflows/selftest.yml` | runs `tools/selftest.py` on Windows for every push to `main`; pushes the log, figures and screenshots to the `selftest-results` branch |
+
+## Decisions already made (keep them)
+
+**Lock-ins and signal**
+- **Analog control:** the lock-ins are only **read** (τ, sensitivity, slope, input). Never add controls that change them. The only exception is the SINE OUT amplitude for setting the laser power.
+- **Signal conversion** gives peak amplitude:
+  - SR570: × √2 × sensitivity (A/V) → photocurrent.
+  - SR560: × √2 ÷ gain → photovoltage.
+  - Lock-in only: × √2, with the unit taken from its input (current input → A, A or A−B → V).
+- **Figure title:** *Photocurrent* or *Photovoltage*, chosen by that same rule.
+- **Bias:** enabled only with the SR570.
+
+**Units and input**
+- Scan size is in **µm** and the step in **nm**. Powers are always saved in **µW**.
+- **Number input:** a plain number is in the field's unit; `k`/`M` multiply; `m`, `µ`/`u`, `n`, `p` are absolute. So for the step field (nm), `1000`, `1k` and `1u` all mean 1 µm.
+
+**Stage and scanning**
+- **Axes:** typed program axes are inverted relative to the stage numbers, to match the joystick (`stage.invert_x/invert_y`). The joystick itself is not changed.
+- **Origin:** **Set origin here** makes the current position (0, 0). Start positions are relative to the origin. Nothing ever silently resets the origin or the start to an absolute 0,0. That once sent the stage millimetres away.
+- **Serpentine** is off by default, because it causes stripes through backlash.
+- **Safety:**
+  - All scan moves go through `SafeStage`, which refuses targets outside the scan area plus a margin and verifies arrival.
+  - Moves longer than 500 µm need confirmation.
+  - Every Tango command and reply is logged to `spcm_stage.log`.
+  - A move counts as done only when the stage is not moving **and** reports the target position.
+- **Laser power:** "Scan at this power" sets the SINE OUT once before each scan, iterating until the sample power is within tolerance. There is **no drift correction** during the scan (a bright gold area was mistaken for drift). Power is still logged per line.
+
+**Point sweeps, line scans, camera**
+- Point sweeps run where the laser is now (never move the stage). Bias × power: bias is the **outer** loop. Plots: one curve per bias in the same figure with a bias legend, plus a 2-D bias–power map.
+- Each sweep power is set with the **2 mV SINE OUT step closest to the target** (`set_laser_power(..., tol_pct=0)`). There is deliberately **no tolerance option** for sweeps: 2 mV is the SR830 resolution and the user wants nothing coarser. The power actually reached is recorded.
+- N readings per point (default 10), about one τ apart; mean and standard deviation (error bars). Power plots: linear and log-log with a fitted |S| = A·P^α.
+- After a sweep the SINE OUT is restored (optional) and the bias ramped to 0.
+- Line scans reuse `ScanWorker` (step mode, rotated, 1 row) so all safety checks apply.
+- Camera calibration matrix A (µm per pixel) is in `config.yaml` → `camera.calibration`. The laser is at the cyan cross. Pixel p ↔ stage `S_now + A·(p − cross)`.
+
+**Data**
+- **HDF5 layout (v2):**
+  - `/info`: settings, instruments and conversion, plus `/info/experiment`.
+  - One group per map, `/map1` or `/map1_+0.5V` for bias sweeps, holding plottable 2-D datasets `photocurrent_X/_Y/_R/_theta_deg` and `reflection_*` with the `x_um`/`y_um` axes, `raw/*`, and the stage coordinates.
+  - `/power_log`.
+  - **No camera images in the h5.**
+  - `scanner.load()` must keep reading old files.
+- **After each scan:** CSV export and the PNG figure are written automatically. Stop & discard deletes them.
+
+**GUI**
+- Layout: scrollable left tabs (Scan / Instruments), maps on the right.
+- Optional dark theme. Camera view is flipped left-right by default.
+
+## How to test without hardware
+
+```
+python main.py --sim          # full GUI with a simulated stage, lock-ins, camera, power meter and sample
+QT_QPA_PLATFORM=offscreen python -c "..."   # headless checks in CI or containers
+```
+
+The simulators live in `instruments.py` and `accessories.py`, with `SimWorld` holding the virtual sample, the laser and the focus. When you add hardware features, also add them to the simulators, so the app can always be tried with `--sim`.
+
+Before handing over a version, run the self-test:
+
+```
+python tools/selftest.py out      # maps (step, fly), point sweeps, line scans, calibration, window
+```
+
+It needs the libraries from `requirements.txt`; without PyQt5 it skips the window part. On every push to `main`, GitHub runs it on Windows (workflow *Self-test*) and pushes `selftest_log.txt`, the figures and screenshots of the window to the branch `selftest-results` (`git fetch origin selftest-results`), so the results can be looked at even without a Windows PC. Look at the screenshots, not only at "passed".
+
+## Releasing
+
+- Bump `__version__` in `appinfo.py` and add a section to `CHANGELOG.md`.
+- Publishing a GitHub **release** (tag `vX.Y.Z`) runs the workflow, which attaches `SPCM-vX.Y.Z-windows.zip`.
+- Users update either by unzipping the release zip, or with Code → Download ZIP followed by `Install SPCM.bat`.
+- `config.yaml` and `data/` are never in the repository, so unzipping a new version over the old one is safe.
+
+## Status
+
+- 0.9.0: first release (pre-release, being tested in the lab).
+- 0.10.0: pre-release with point sweeps, line scans, camera calibration. Tested in simulation; being tested on the microscope.
+
+## Working with the user
+
+- Keep changes small and testable, and say exactly what to check on the real setup.
+- Ask before changing the conventions above.
+- Explain errors and setup steps in plain words. The user sends screenshots.
+- Commit as `DP7T <342493853+DP7T@users.noreply.github.com>`.

@@ -8,3 +8,4 @@ build/
 dist/
 *.spec
 config.yaml
+selftest_out/
