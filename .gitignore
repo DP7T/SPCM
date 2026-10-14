@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+data/
+*_csv/
+spcm_error.log
+spcm_stage.log*
+build/
+dist/
+*.spec
+config.yaml

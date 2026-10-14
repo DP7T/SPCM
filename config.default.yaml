@@ -1,0 +1,74 @@
+# ---- SPCM configuration ----------------------------------------------
+# Run  "python main.py --list"  to see the available ports/instruments.
+
+first_run: true           # shows the welcome window once
+simulate: false            # true = run without hardware (same as --sim)
+save_dir: data             # where .h5 files go (relative to this folder or absolute)
+
+stage:                     # Märzhäuser Tango Desktop
+  port: COM3               # USB virtual COM port of the Tango
+  baudrate: 57600          # Tango default
+  move_timeout: 60         # s
+  invert_x: true           # program x/y point the opposite way to the stage's
+  invert_y: true           #   own numbers (so typed directions match the joystick)
+  has_z: true              # Tango z axis moves the focus (needed for Autofocus)
+
+lockin_photocurrent:       # SR830 measuring photocurrent
+  resource: GPIB0::8::INSTR      # or e.g. ASRL5::INSTR for RS232
+
+lockin_reflection:         # SR830 measuring the reflection photodiode
+  resource: GPIB0::9::INSTR
+
+bias:
+  # type: none          -> no bias control (set it by hand)
+  # type: sr570         -> bias source of the SR570 preamp (RS-232, ±5 V)
+  # type: lockin_aux    -> AUX OUT of one of the SR830s (±10.5 V)
+  # type: keithley2400  -> Keithley 24xx source-meter
+  # If the bias source can't be opened the program still starts, without bias.
+  type: none
+  port: COM4               # for sr570: COM port of the USB-RS232 adapter
+  lockin: photocurrent     # for lockin_aux: which SR830 (photocurrent / reflection)
+  aux_channel: 1           # for lockin_aux: AUX OUT 1-4
+  resource: GPIB0::24::INSTR   # for keithley2400
+  compliance_A: 1.0e-6     # for keithley2400
+  max_abs_V: 2.0           # safety limit - the program refuses anything larger
+  ramp_step: 0.1           # V per step when changing bias
+  ramp_delay: 0.05         # s between ramp steps
+
+powermeter:                # Thorlabs PM100USB (optional)
+  enabled: false
+  resource:                # leave empty = first Thorlabs meter found
+  wavelength_nm: 532       # PM100USB has no front panel: set your laser λ here
+  averages: 10             # samples averaged per reading (~3 ms each -> 10 = 30 ms)
+  sample_factor: 1.0       # meter power / power on sample (e.g. 3.18)
+  range_W: 0.001           # FIXED upper range in W (linear). Use auto for autorange
+
+power_lock:                # laser power setting (sine out of a lock-in drives the laser)
+  lockin: photocurrent     # whose SINE OUT drives the laser: photocurrent / reflection
+  max_amplitude_V: 5.0     # never set the sine amplitude above this (protect the laser)
+
+power_set:                 # 'Set the laser power before each scan' (also in the window)
+  enabled: false
+  target_uW: 10            # power on the sample
+  tol_pct: 1               # accept when within ± this many %
+
+camera:                    # Thorlabs CS165CU (optional). Close ThorCam first!
+  enabled: false
+  exposure_ms: 20
+  serial:                  # leave empty = first camera found
+  dll_dir:                 # leave empty = look in the ThorCam install folder
+
+scan_defaults:             # initial values shown in the window
+  origin: corner           # corner = position is the first pixel; centre = middle of the map
+  direction: +x and +y     # which way the map extends from the start corner
+  x_center: 0
+  y_center: 0
+  x_size: 20
+  y_size: 20
+  step: 0.5
+  serpentine: false        # true = every other line backwards (faster, can zig-zag)
+  settle_auto: true        # wait until 99 % settled (from τ and filter slope)
+  settle_tc: 3             # used when settle_auto is false
+  extra_settle_ms: 0
+  biases: "-1:1:0.5"
+  sample: sample

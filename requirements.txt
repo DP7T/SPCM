@@ -1,0 +1,10 @@
+numpy
+pyqtgraph>=0.13
+PyQt5
+h5py
+matplotlib
+pyvisa
+pyvisa-py
+pyserial
+pyyaml
+# Camera: thorlabs_tsi_sdk is not on PyPI - install it from the ThorCam folder (see README)

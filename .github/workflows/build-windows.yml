@@ -1,0 +1,66 @@
+# Builds SPCM.exe for Windows.
+#  - publishing a Release (or pushing a tag like v0.9.1) -> SPCM-v0.9.1-windows.zip
+#    is attached to that release
+#  - "Run workflow" button (Actions tab) -> test build, downloadable from the run
+name: Build Windows app
+
+on:
+  push:
+    tags: ["v*"]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build SPCM.exe
+        run: >
+          pyinstaller --noconfirm --windowed --name SPCM --icon spcm.ico
+          --collect-all pyqtgraph
+          --hidden-import pyvisa_py --collect-submodules pyvisa_py
+          --hidden-import serial.tools.list_ports
+          --add-data "config.default.yaml;."
+          main.py
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = if ($env:GITHUB_REF_TYPE -eq "tag") { $env:GITHUB_REF_NAME } else { "test-$($env:GITHUB_SHA.Substring(0,7))" }
+          Copy-Item config.default.yaml dist/SPCM/
+          Copy-Item README.md dist/SPCM/
+          Copy-Item CHANGELOG.md dist/SPCM/
+          Set-Content "dist/SPCM/SPCM (simulation).bat" '@start "" "%~dp0SPCM.exe" --sim'
+          Compress-Archive -Path dist/SPCM -DestinationPath "SPCM-$name-windows.zip"
+          "ZIP=SPCM-$name-windows.zip" | Out-File -Append $env:GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SPCM-windows
+          path: ${{ env.ZIP }}
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: ${{ env.ZIP }}
+          body: |
+            Windows build of SPCM ${{ github.ref_name }}.
+            Unzip, then start **SPCM.exe** (or *SPCM (simulation).bat* to try without hardware).
+            Updating: unzip over your old SPCM folder. Your settings (config.yaml) and data are kept. See CHANGELOG.md for what changed.
