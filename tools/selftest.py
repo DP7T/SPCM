@@ -50,6 +50,9 @@ def hardware():
 
 
 CFG, HW = hardware()
+for _a in HW.accessories:                 # faster simulated power meter readings
+    if _a.name == "powermeter":
+        _a.averages = 1
 
 
 def run_worker(w):
@@ -139,6 +142,70 @@ def _():
                      sample="selftest_fly")
     d = load(run_worker(ScanWorker(HW, s, OUT)))
     assert np.isfinite(d.pc[..., 0]).mean() > 0.9
+
+
+@check("series of maps over laser power (2 mV steps), SINE OUT back")
+def _():
+    from scanner import ScanSettings, ScanWorker, load, export_csv
+    from figures import save_all
+    HW.lockin_pc.set_sine_amplitude(1.0)
+    s = ScanSettings(x_center=-8, y_center=-6, x_size=4, y_size=2, step=1.0,
+                     serpentine=False, outer="power", outer_values=[60, 80],
+                     origin_x=0, origin_y=0, sample="selftest_powerseries")
+    d = load(run_worker(ScanWorker(HW, s, OUT, name="selftest_powerseries_001")))
+    got = [m.get("laser_power_reached_uW") for m in d.map_info]
+    assert d.pc.shape[0] == 2 and all(abs(g / t - 1) < 0.03 for g, t in zip(got, (60, 80))), got
+    assert abs(HW.lockin_pc.sine_amplitude() - 1.0) < 0.003, "SINE OUT not put back"
+    export_csv(d)
+    save_all(d)
+
+
+@check("point sweeps: power, bias, bias x power")
+def _():
+    import sweeps
+    HW.stage.move_to(-5, 0.5)
+    HW.lockin_pc.set_sine_amplitude(1.0)
+    for kind in ("power", "bias", "bias_power"):
+        s = sweeps.SweepSettings(kind=kind, powers_uW=[30, 50, 80], biases=[-0.5, 0.5],
+                                 n_avg=3, x_stage=-5, y_stage=0.5, u=5, v=0.5,
+                                 amp_mode="sr570", amp_value=1e-6, sample="selftest")
+        d = sweeps.load_sweep(run_worker(sweeps.SweepWorker(HW, s, OUT)))
+        assert np.isfinite(d.pc).all(), kind
+        if kind != "bias":
+            a = d.fits(0)[0]["alpha"]
+            assert 0.7 < a < 1.0, f"alpha {a}"
+        sweeps.export_csv(d)
+        sweeps.save_all(d)
+    assert abs(HW.lockin_pc.sine_amplitude() - 1.0) < 0.003, "SINE OUT not restored"
+
+
+@check("line scans: bias series and power series")
+def _():
+    import linescan
+    from scanner import ScanWorker, load
+    for outer, vals in (("bias", [-0.5, 0, 0.5]), ("power", [50, 80])):
+        s = linescan.line_settings((-8, -3), (8, 4), 0.5,
+                                   biases=vals if outer == "bias" else None,
+                                   outer=outer, values=vals if outer == "power" else None,
+                                   origin=(0, 0), flips=(False, False), amp_mode="sr570",
+                                   amp_value=1e-6, sample=f"selftest_line_{outer}")
+        d = load(run_worker(ScanWorker(HW, s, OUT)))
+        assert d.pc.shape[:2] == (len(vals), 1) and np.isfinite(d.pc).all(), outer
+        linescan.export_csv(d)
+        linescan.save_all(d)
+    HW.lockin_pc.set_sine_amplitude(1.0)
+
+
+@check("camera calibration (simulated)")
+def _():
+    import calibration
+    cam = next(a for a in HW.accessories if a.name == "camera")
+    HW.stage.move_to(0, 0)
+    HW.stage.move_z(101.7)                     # in focus (the simulated sample)
+    cal = calibration.calibrate(HW.stage, cam, step_um=4.0, laser_px=(240, 180))
+    assert abs(cal.scale_um_per_px() - cam.um_per_px) / cam.um_per_px < 0.03, "wrong scale"
+    x, y = cal.px_to_stage(240 + 50, 180, cur=(0, 0), laser=(240, 180))
+    assert abs(x - 50 * cam.um_per_px) < 0.3 and abs(y) < 0.3, (x, y)
 
 
 @check("quick I-V (cycles, AUX IN), save/load/CSV/figure")
@@ -263,8 +330,59 @@ if HAVE_QT:
         w.res_dialog.grab().save(os.path.join(OUT, "screen_resolution_dialog.png"))
         w.res_dialog.save()
         w.res_btn.setChecked(False)
-        # quick I-V through the GUI
+        # line drawn on the map -> line scan (series: nothing)
+        w.line_btn.setChecked(True)
+        shot("map_with_line")
+        w.scan_line()
+        t0 = time.time()
+        while w.thread is not None and time.time() - t0 < 300:
+            pump(0.2)
+        assert w.thread is None and w.line_data is not None, "line scan did not finish"
+        shot("line")
+        w.line_btn.setChecked(False)
+        # camera: calibrate, then draw a frame and a line on it
+        if getattr(w, "cam_tab", None) is not None:
+            w.tabs.setCurrentWidget(w.cam_tab)
+            HW.stage.move_z(101.7)
+            HW.stage.move_to(0, 0)
+            pump(0.5)
+            w.cam_cross.setPos(240, 180)
+            w._cross_placed = True
+            w.cal_step.setValue(4.0)
+            w.calibrate_camera()
+            t0 = time.time()
+            while getattr(w, "cal_thread", None) is not None and time.time() - t0 < 60:
+                pump(0.2)
+            assert w.cal is not None, "calibration failed"
+            w.cam_frame_btn.setChecked(True)
+            w.cam_line_btn.setChecked(True)
+            pump(0.3)
+            before = w.cam_rois[0].pos()
+            HW.stage.move_to(3, 0)
+            w._track_overlays(force=True)
+            moved = w.cam_rois[0].pos().x() - before.x()
+            assert abs(moved + 3 / w.cal.scale_um_per_px()) < 2, f"overlay moved {moved}"
+            shot("camera_calibrated")
+            w.use_cam_frame()
+            assert w.side_tabs.currentIndex() == 0
+            w.cam_frame_btn.setChecked(False)
+            w.cam_line_btn.setChecked(False)
+        # point sweep (bias x power) through the GUI
+        HW.stage.move_to(-5, 0.5)
+        w.amp_mode.setCurrentIndex(w.amp_mode.findData("sr570"))
         w.side_tabs.setCurrentIndex(1)
+        w.sw_kind.setCurrentIndex(w.sw_kind.findData("bias_power"))
+        w.sw_powers.setText("40, 60, 80")
+        w.sw_biases.setText("-0.5, 0.5")
+        w.sw_navg.setValue(3)
+        w.start()
+        t0 = time.time()
+        while w.thread is not None and time.time() - t0 < 600:
+            pump(0.2)
+        assert w.thread is None and w.sweep_data is not None, "sweep did not finish"
+        shot("sweep_bias_power")
+        # quick I-V through the GUI
+        w.side_tabs.setCurrentIndex(2)
         w.iv_max.setValue(0.5)
         w.iv_min.setValue(-0.5)
         w.iv_step.setValue(50)

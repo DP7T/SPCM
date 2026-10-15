@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.2.0 (in testing)
+- **Camera calibration**: one button; then double-click the camera image to move the laser
+  there, and draw scan frames and lines on the live image (they stay on the sample when
+  the stage moves)
+- **Line scans**: draw a line on a map or on the camera image, scan along it at any angle
+- **Series**: one map or line per **bias** or per **laser power on the sample** (each set
+  with 2 mV SINE OUT steps in one direction, power reached saved; SINE OUT back in 2 mV
+  steps afterwards) - replaces the bias box; gives a distance × bias / power image for lines
+- **Point sweeps** on one spot: power, bias or bias × power; mean and spread of N
+  readings; linear and log-log plots with the fitted exponent α; bias–power map
+- Lists accept `1:100:*2` (multiply each step); the stop value is always included
+- **Measure resolution** refuses lines that don't cross a clear edge
+- All new measurements are saved like maps: own folder, name pattern, numbers-only CSV
+
 ## 1.1.1 (in testing)
 - **Set power now** respects *Never set SINE OUT above* from Settings (it used the
   default 5 V before - also in 1.0)

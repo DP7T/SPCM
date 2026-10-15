@@ -105,6 +105,13 @@ def fit_edge(x, y):
         f = sigmas[1] / sigmas[0]
         sigmas = np.geomspace(bs / f ** 2, bs * f ** 2, 25)
     r, x0, s, (A, B) = best
+    rms = math.sqrt(r / len(x))
+    # a real edge: the step stands out of the noise, sits inside the line and is
+    # narrower than the line (otherwise it is a slope or noise, not an edge)
+    if (abs(2 * B) < 5 * rms or not (x.min() + 0.05 * L <= x0 <= x.max() - 0.05 * L)
+            or s > L / 4):
+        raise ValueError("No clear edge along the line: draw it across one sharp edge "
+                         "(e.g. an electrode edge), with flat parts on both sides.")
     return {"x0": float(x0), "sigma": float(s), "A": float(A), "B": float(B),
             "fwhm": float(s * FWHM_PER_SIGMA), "w1090": float(s * W1090_PER_SIGMA),
             "rms": float(math.sqrt(r / len(x))), "n": int(len(x)),

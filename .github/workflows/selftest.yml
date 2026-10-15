@@ -2,7 +2,7 @@ name: Self-test (simulation)
 
 on:
   push:
-    branches: [main, next]
+    branches: [main, next, dev]
   workflow_dispatch:
 
 permissions:

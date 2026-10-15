@@ -508,7 +508,9 @@ class SimSR830:
             sig, noise, phase = self.w.photocurrent(x, y), 3e-11, 12.0
         else:
             sig, noise, phase = 0.05 * self.w.reflection(x, y), 2e-4, -3.0
-        sig *= self.w.power_factor()
+        pf = max(self.w.power_factor(), 0.0)
+        # photocurrent grows a bit slower than linearly with power (α ≈ 0.85)
+        sig *= pf ** 0.85 if self.role == "photocurrent" else pf
         ph = np.deg2rad(phase)
         X = sig * np.cos(ph) + noise * self.w.rng.normal()
         Y = sig * np.sin(ph) + noise * self.w.rng.normal()

@@ -94,6 +94,19 @@ class ScanSettings:
     #   "square" x pi/sqrt(2) (on-off height of a square-wave/chopped signal)
     signal_as: str = "peak"
     lockin_unit: str = "V"          # "A" when the SR830 current input is used
+    scan_type: str = "map"          # "map", or "line" (one row along a drawn line)
+    # what changes from one map (or line) to the next:
+    #   "bias"   the biases list (V); [None] = a single map
+    #   "power"  outer_values = laser power on the sample (µW), each set with the
+    #            2 mV SINE OUT steps (one direction) closest to it; needs the meter
+    outer: str = "bias"
+    outer_values: list = field(default_factory=list)
+
+    def outer_list(self):
+        """Values of the series (one map or line each); [None] = just one."""
+        if getattr(self, "outer", "bias") == "power":
+            return list(self.outer_values) or [None]
+        return list(self.biases)
 
     def axes(self):
         nx = int(round(self.x_size / self.step)) + 1
@@ -118,6 +131,38 @@ class ScanSettings:
         c, s_ = np.cos(np.radians(a)), np.sin(np.radians(a))
         dx, dy = x - self.x_center, y - self.y_center
         return self.x_center + c * dx - s_ * dy, self.y_center + s_ * dx + c * dy
+
+
+OUTER = {"bias": ("Bias", "V"), "power": ("Laser power on sample", "µW")}
+
+
+def outer_name(s):
+    """-> (label, unit) of what changes between maps / lines."""
+    return OUTER.get(getattr(s, "outer", "bias"), OUTER["bias"])
+
+
+def outer_text(s, v):
+    """'0.5 V', '20 µW', or '' for a single map."""
+    return "" if v is None else f"{v:g} {outer_name(s)[1]}"
+
+
+def outer_tag(s, v):
+    """Suffix for group / folder names: '_+0.5V', '_20uW', '' for a single map."""
+    if v is None:
+        return ""
+    return f"_{v:g}uW" if getattr(s, "outer", "bias") == "power" else f"_{v:+g}V"
+
+
+def ramp_sine(lockin, target_V, stop=None, step_V=0.002, delay=0.01):
+    """Move the SINE OUT to target_V in 2 mV steps (one direction, no jumps),
+    e.g. to put the laser power back after a power series."""
+    stop = stop or (lambda: False)
+    a = lockin.sine_amplitude()
+    d = 1 if target_V > a else -1
+    while abs(target_V - a) > step_V / 2 and not stop():
+        a = lockin.set_sine_amplitude(a + d * min(step_V, abs(target_V - a)))
+        time.sleep(delay)
+    return a
 
 
 def _eng(v, unit):
@@ -174,23 +219,52 @@ def pc_scale(settings):
     return base, u, f"raw{mult} (lock-in only) = {label}"
 
 
-def parse_bias_list(text):
+def parse_list(text, scale=1.0):
     """'0, 0.5, 1'  or  '-1:1:0.5' (start:stop:step, inclusive)  or mixed.
-    Numbers may use SI prefixes: '-500m:500m:100m'."""
+    '1:100:*2' multiplies by 2 each time (1, 2, 4 ... 64, 100) - handy for
+    power sweeps on a log scale. Numbers may use SI prefixes ('-500m:500m:100m');
+    scale = the field's unit, as for parse_number."""
     out = []
     for part in text.replace(";", ",").split(","):
         part = part.strip()
         if not part:
             continue
         if ":" in part:
-            a, b, s = (parse_number(p) for p in part.split(":"))
+            pieces = part.split(":")
+            if len(pieces) != 3:
+                raise ValueError(f"Use start:stop:step, not '{part}'")
+            a, b = parse_number(pieces[0], scale), parse_number(pieces[1], scale)
+            st = pieces[2].strip()
+            if st[:1] in ("*", "x", "×"):
+                f = float(parse_number(st[1:]))
+                if f <= 1 or a <= 0 or b <= 0:
+                    raise ValueError("For '*factor' use a factor above 1 and "
+                                     "positive start and stop")
+                lo, hi = min(a, b), max(a, b)
+                vals = [lo]
+                while vals[-1] * f < hi * (1 - 1e-9):
+                    vals.append(vals[-1] * f)
+                if vals[-1] < hi * (1 - 1e-9):
+                    vals.append(hi)
+                out.extend((np.round(vals if a <= b else vals[::-1], 9)).tolist())
+                continue
+            s = parse_number(st, scale)
             if s == 0:
                 raise ValueError("Step can't be 0")
-            n = int(round(abs(b - a) / abs(s))) + 1
-            out.extend(np.round(np.linspace(a, b, n), 6).tolist())
+            s = abs(s) if b >= a else -abs(s)
+            n = int(np.floor((b - a) / s + 1e-9)) + 1
+            vals = a + s * np.arange(n)
+            if abs(vals[-1] - b) > 1e-9 * max(abs(s), 1e-30) * 1e3:
+                vals = np.append(vals, b)          # the stop value is always included
+            out.extend(np.round(vals, 9).tolist())
         else:
-            out.append(parse_number(part))
+            out.append(parse_number(part, scale))
     return out
+
+
+def parse_bias_list(text):
+    """Bias values in V (see parse_list)."""
+    return parse_list(text, 1.0)
 
 
 class ScanData:
@@ -198,7 +272,7 @@ class ScanData:
         self.settings = settings
         self.hw_info = hw_info
         self.xs, self.ys = settings.axes()
-        nb, ny, nx = len(settings.biases), len(self.ys), len(self.xs)
+        nb, ny, nx = len(settings.outer_list()), len(self.ys), len(self.xs)
         self.pc = np.full((nb, ny, nx, 4), np.nan)
         self.refl = np.full((nb, ny, nx, 4), np.nan)
         self.map_info = [{} for _ in range(nb)]
@@ -250,9 +324,14 @@ class ScanData:
             for k, v in s.conditions.items():
                 exp.attrs[k] = str(v)
             exp.attrs["notes"] = s.notes
-            for ib, b in enumerate(s.biases):
-                g = f.create_group(f"map{ib}" + ("" if b is None else f"_{b:+g}V"))
-                g.attrs["bias_V"] = np.nan if b is None else b
+            olabel, ounit = outer_name(s)
+            is_bias = getattr(s, "outer", "bias") == "bias"
+            for ib, b in enumerate(s.outer_list()):
+                g = f.create_group(f"map{ib}" + outer_tag(s, b))
+                g.attrs["bias_V"] = np.nan if (b is None or not is_bias) else b
+                if not is_bias:
+                    g.attrs["series"] = f"{olabel} ({ounit})"
+                    g.attrs["series_value"] = np.nan if b is None else b
                 for k, v in (self.map_info[ib] or {}).items():
                     if v is not None and not isinstance(v, (list, dict)):
                         g.attrs[k] = v
@@ -323,8 +402,8 @@ def export_csv(d):
     ux = (-1 if getattr(st, "flip_x", False) else 1) * (np.asarray(d.xs) - ox) + 0.0
     vy = (-1 if getattr(st, "flip_y", False) else 1) * (np.asarray(d.ys) - oy) + 0.0
     ix, iy = np.argsort(ux), np.argsort(vy)
-    for ib, b in enumerate(d.settings.biases):
-        sub = os.path.join(out, f"map{ib}" + ("" if b is None else f"_{b:+g}V"))
+    for ib, b in enumerate(d.settings.outer_list()):
+        sub = os.path.join(out, f"map{ib}" + outer_tag(d.settings, b))
         os.makedirs(sub, exist_ok=True)
         for name, arr, f_, u in (("photocurrent", d.pc, fac, unit),
                                  ("reflection", d.refl, 1.0, "V")):
@@ -898,9 +977,17 @@ class ScanWorker(QtCore.QObject):
                                 **{k: v for k, v in self.lock_cfg.items() if k != "enabled"}}
                 self.status.emit(f"Power lock on: target {target * 1e6:.2f} µW, "
                                  f"sine {amp0:.3f} V")
-            if s.target_power_uW and self.pm is not None:
-                li = (hw.lockin_refl if self.lock_cfg.get("lockin") == "reflection"
-                      else hw.lockin_pc)
+            outer = getattr(s, "outer", "bias")
+            li_laser = (hw.lockin_refl if self.lock_cfg.get("lockin") == "reflection"
+                        else hw.lockin_pc)
+            self._amp0 = None
+            if outer == "power":
+                if self.pm is None:
+                    raise RuntimeError("A laser power series needs the power meter (PM100). "
+                                       "Turn it on in Hardware → Settings.")
+                self._amp0 = li_laser.sine_amplitude()
+            if s.target_power_uW and self.pm is not None and outer != "power":
+                li = li_laser
                 hw.stage.move_to(*s.start_position())
                 res = set_laser_power(self.pm, li, s.target_power_uW * 1e-6,
                                       s.power_tol_pct, self.lock_cfg.get("max_amplitude_V", 5.0),
@@ -918,16 +1005,33 @@ class ScanWorker(QtCore.QObject):
                                    "Use Step mode, or set the angle to 0.")
             if s.mode == "fly":
                 self._fly_setup()
-            for ib, bias in enumerate(s.biases):
+            for ib, val in enumerate(s.outer_list()):
                 if self._stop:
                     break
-                if bias is not None:
-                    self.status.emit(f"Ramping bias to {bias:g} V")
-                    hw.bias.ramp_to(bias)
+                bias = val if outer == "bias" else None
+                extra = {}
+                if outer == "bias" and val is not None:
+                    self.status.emit(f"Ramping bias to {val:g} V")
+                    hw.bias.ramp_to(val)
+                elif outer == "power" and val is not None:
+                    hw.stage.move_to(*s.start_position())     # same spot every time
+                    res = set_laser_power(self.pm, li_laser, val * 1e-6, 0,  # closest step
+                                          self.lock_cfg.get("max_amplitude_V", 5.0),
+                                          status=self.status.emit, stop=lambda: self._stop)
+                    if res.get("aborted") or self._stop:
+                        break
+                    if res["message"].startswith("Laser power not set"):
+                        raise RuntimeError(res["message"])
+                    if not res["ok"]:
+                        self.notify.emit(f"{val:g} µW: {res['message']}", "warn")
+                    extra = {"laser_power_set_uW": val,
+                             "laser_power_reached_uW": round(res["power_uW"], 4),
+                             "sine_amplitude_V": res["amplitude_V"]}
                 # read front-panel settings for this map
                 tau_pc = hw.lockin_pc.time_constant()
                 tau_r = hw.lockin_refl.time_constant()
                 d.map_info[ib] = {
+                    **extra,
                     "bias_V": bias, "tau_pc_s": tau_pc, "tau_refl_s": tau_r,
                     "sens_pc": hw.lockin_pc.sensitivity(),
                     "sens_refl": hw.lockin_refl.sensitivity(),
@@ -941,7 +1045,7 @@ class ScanWorker(QtCore.QObject):
                 wait = pixel_wait(s, self._tau, self._poles)
                 d.map_info[ib]["wait_s"] = wait
                 d.map_info[ib]["slope_poles"] = list(self._poles)
-                label = "" if bias is None else f" @ {bias:g} V"
+                label = "" if val is None else f" @ {outer_text(s, val)}"
                 rows = range(ny) if s.y_dir > 0 else range(ny - 1, -1, -1)
                 for line, iy in enumerate(rows):
                     if self._stop:
@@ -990,6 +1094,10 @@ class ScanWorker(QtCore.QObject):
             d.completed = not self._stop
             if any(b is not None for b in s.biases):
                 hw.bias.ramp_to(0.0)
+            if getattr(self, "_amp0", None) is not None:
+                self.status.emit(f"Laser power back: SINE OUT to {self._amp0:.3f} V "
+                                 "in 2 mV steps")
+                ramp_sine(li_laser, self._amp0)
             hw.stage.move_to(*s.start_position())   # back to where you started
             d.save(self.path)
             self.finished.emit(self.path)
@@ -1010,6 +1118,11 @@ class ScanWorker(QtCore.QObject):
             try:
                 if any(b is not None for b in s.biases):
                     hw.bias.ramp_to(0.0)
+            except Exception:
+                pass
+            try:
+                if getattr(self, "_amp0", None) is not None:
+                    ramp_sine(li_laser, self._amp0)
             except Exception:
                 pass
             try:

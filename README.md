@@ -72,7 +72,11 @@ The left side has two tabs:
   - *SR570 current preamp*: value × sensitivity, in amperes. Choose the same sensitivity as on the SR570 front panel.
   - *SR560 voltage preamp*: value ÷ gain, in volts. Pick the gain from the list, matching the SR560 front panel.
   - In every case the value is also multiplied by **√2**. The SR830 reads rms, and this turns it into the peak amplitude.
-- **Bias sweep:** only available with the SR570 current preamp, because the bias comes from the SR570. tick the box and enter `0, 0.5, 1` or `-2:2:0.5`. You get one map per value. The bias ramps gently between values and returns to 0 V at the end, when you press Stop, and when an error occurs.
+- **Series** (Scan tab): one map per value of
+  - **Bias** (V): only with the SR570 current preamp, because the bias comes from the SR570. Enter `0, 0.5, 1` or `-2:2:0.5`. The bias ramps gently between values and returns to 0 V at the end, when you press Stop, and when an error occurs.
+  - **Laser power on sample** (µW), e.g. `5, 10, 20` or `1:100:*2`: before each map the SINE OUT is moved in 2 mV steps (one direction) to the power closest to each value, at the scan's start position; the power reached is saved with that map. At the end the SINE OUT goes back in 2 mV steps. Needs the power meter.
+
+  The same series is used for line scans.
 - **Scan mode** (Timing box):
   - **Step** stops at every pixel, waits, then reads. It's the most accurate, but every stop costs time.
   - **Fly** moves the stage along each line at constant speed while both lock-ins are read continuously. The speed is set so every pixel still gets its wait time, and the lock-in delay is corrected so left-going and right-going lines line up. It is usually several times faster.
@@ -104,8 +108,47 @@ The left side has two tabs:
   - Drag the round handle to rotate it.
 
   Then press **Scan this frame**: the start position, size, direction and angle are filled in for you. Check the step and press Start scan. It also works on a scan you opened from a file, as long as the origin is the same spot.
-- Double-click a map to park the laser on that spot, for example before a quick I–V.
+- Double-click a map to park the laser on that spot, for example before a point sweep or a quick I–V.
 - If the photocurrent lock-in overloads, a warning appears in the status bar.
+
+## Point sweeps (power, bias, or both) on one spot
+
+1. Park the laser on the spot: double-click a map, double-click the calibrated camera image, or use the joystick.
+2. Open the **Point sweep** tab on the left and choose the sweep:
+   - **Power:** a list of powers **on the sample** in µW, e.g. `1:50:5` (1, 6, 11 … 46, 50), `1:100:*2` (1, 2, 4 … 64, 100: evenly spaced on a log scale) or `1, 2, 5, 10`. Each power is set with the 2 mV SINE OUT steps (always in one direction, like *Set power now*) that come closest, checked with the power meter, and the power actually reached is recorded.
+   - **Bias:** a list of biases through the SR570, like the bias maps.
+   - **Bias × power:** for every bias (outer loop), the whole power list (inner loop).
+3. **Readings per point** (10 by default): after the lock-ins have settled (the same wait as in Timing), this many readings are taken about one time constant apart. The mean is saved, and their standard deviation is the error bar.
+4. Press **Start sweep** (the Start button changes its name on this tab). Stop & save / Stop & discard work as for maps.
+
+The **Point sweep** tab on the right shows the result live:
+- signal vs power (or bias), with error bars;
+- for power sweeps, a **log-log plot** with a fitted power law |S| = A·P^α and the value of α (one per bias);
+- for bias × power, one curve per bias (with a legend) and a **bias–power map** coloured by the photocurrent or photovoltage.
+
+Afterwards the SINE OUT goes back to where it was in 2 mV steps (untick *Put the SINE OUT back afterwards* if you don't want that) and the bias ramps back to 0 V. Like every measurement it gets its own folder (`powersweep`, `biassweep` or `biaspowersweep` in the name) with the .h5, a PNG with the same plots, and a `_csv` folder with `sweep.csv` (numbers only, one row per point, every channel with its spread; the columns are listed in `info.txt`) and, for bias × power, `photocurrent_X_matrix.csv`.
+
+## Line scans
+
+1. Press **Draw line** above the maps. A yellow line appears on both maps; drag its ends (or the whole line) where you want it. The status bar shows its length and the number of points.
+2. Press **Scan this line**. The laser steps along the line at any angle, using the **Step**, **Timing** and **Series** from the Scan tab and the laser-power setting from the Instruments tab.
+3. The **Line scan** tab on the right shows the signal and the reflection vs the distance along the line, one curve per value. With a **Series** of biases or laser powers you also get the **distance × bias** (or **distance × power**) image.
+
+You can draw the line on the camera image too, once the camera is calibrated. Line scans get their own folder too (`line` in the name): the .h5 has the same layout as maps, with 1-row images plus `distance_um` and the x, y of every point; a PNG; and `_csv/line.csv` (numbers only, columns listed in `info.txt`).
+
+## Camera calibration
+
+Once calibrated, the program knows which stage position every camera pixel shows. Then you can:
+- **double-click the camera image** to move the laser to that spot;
+- **draw a scan frame** or **a line** on the live camera image, and press *Scan this frame* or *Scan this line*. The drawings stay on the same spot of the sample when the stage moves.
+
+To calibrate (once, and again after changing the objective or moving the camera):
+1. Focus, and put the **cyan cross on the laser spot**.
+2. Go to a place with clear structure in x **and** y, such as the corner of an electrode or a flake.
+3. Set **move (µm)** so the image moves by roughly 5–20 % of its width: about 5 µm with a 50–100× objective, 20 µm with 10×.
+4. Press **Calibrate camera**. The stage moves a few times in x and in y (about 10 s) and comes back. The result appears next to the button, for example *120 nm per pixel, rotated 0.3°*, and is saved.
+
+If the image couldn't be matched (out of focus, no structure, move too small or too large), you get a message and the old calibration stays.
 
 ## Quick I–V (DC, without moving the probes)
 

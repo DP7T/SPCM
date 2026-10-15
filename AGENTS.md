@@ -25,7 +25,11 @@ the real hardware and report back with screenshots. Write in plain language for 
 | `instruments.py` | `TangoStage`, `SR830`, bias sources (`SR570Bias`, `LockinAuxBias`, `Keithley2400`, `NoBias`), simulators (`SimWorld`, `SimStage`, `SimSR830`, `SimBias`), `connect()` |
 | `accessories.py` | `PM100USB`, `PM100TLPM`, `ThorCamera`, `SimCamera`, `SimPM100`, `ensure_thorlabs_sdk()` (finds the camera package inside the ThorCam install), `connect_accessories()` |
 | `scanner.py` | `ScanSettings`, signal conversion (`pc_scale`, `signal_kind`), settling (`pixel_wait`), `ScanData` (HDF5 save/load, CSV export), `SafeStage`, `set_laser_power`, `ScanWorker` (QThread; step and fly modes, bias loop, power log) |
-| `gui.py` | `MainWindow`, `MapPanel`, toasts and notifications, power poller, camera view, frame drawing, file-name pattern |
+| `gui.py` | `MainWindow`, `MapPanel`, toasts and notifications, power poller, camera view + calibration, frame and line drawing (maps and camera), series box, point-sweep and quick I–V tabs, file-name pattern |
+| `sweeps.py` | point sweeps: `SweepSettings`, `SweepData` (save/load/CSV/figure, power-law fit), `SweepWorker` |
+| `linescan.py` | line scans: `line_settings()` builds a 1-row rotated `ScanSettings` (`scan_type="line"`) run by the normal `ScanWorker`; CSV and figure |
+| `sweep_view.py` | live plots: `SweepView` (point sweeps), `LineView` (line scans) |
+| `calibration.py` | camera ↔ stage calibration (`Calibration`, `calibrate()`, phase-correlation `image_shift()`) |
 | `tools/selftest.py` | tests in simulation: names, power setting, maps (step, fly), the window off-screen with screenshots |
 | `settings_dialog.py` | hardware settings window; writes `config.yaml` |
 | `numparse.py` | SI-prefix number parsing and the `SISpinBox` class |
@@ -65,6 +69,13 @@ the real hardware and report back with screenshots. Write in plain language for 
   - A move counts as done only when the stage is not moving **and** reports the target position.
 - **Laser power:** "Scan at this power" sets the SINE OUT once before each scan. `set_laser_power` moves the SINE OUT in **2 mV steps in one direction only** (never up and down, the user's request to protect the laser) until the sample power is within tolerance; it can be aborted (button, or Stop before a scan). There is **no drift correction** during the scan (a bright gold area was mistaken for drift). Power is still logged per line.
 
+**Series, line scans, point sweeps, camera**
+- Maps and line scans can run as a **series**: one per bias (`outer="bias"`, `biases`) or per laser power on the sample (`outer="power"`, `outer_values` in µW). Chopping frequency was considered and rejected by the user (not worth varying), and the lock-ins stay read-only apart from the SINE OUT.
+- Every power in a series or point sweep is set with `set_laser_power(..., tol_pct=0)`: 2 mV steps in one direction, stopping at the step closest to the target. The SINE OUT is put back with `ramp_sine` (2 mV steps), never with a jump.
+- Point sweeps run where the laser is (never move the stage): power, bias or bias × power (bias outer). N readings ~1 τ apart, mean ± std. Plots: linear + log-log with |S| = A·P^α, one curve per bias, bias–power map.
+- Camera calibration matrix A (µm per pixel) is in `config.yaml` → `camera.calibration`. The laser is at the cyan cross. Pixel p ↔ stage `S_now + A·(p − cross)`.
+- Lock-in measurements (maps, lines, sweeps) and the quick I–V remind the user to re-cable / re-set the SR570 when switching between them.
+
 **Quick I–V and resolution**
 - Quick I–V reads the SR570 output on **AUX IN 1** of the photocurrent SR830 (`OAUX? 1`); current = AUX voltage × SR570 sensitivity, which the user selects (the SR570 can't be read). SR570 filter OFF / LOW DRIFT and the cable move are done **by hand**; the program only reminds (`_switch_reminder`, on every switch map ↔ I–V, remembered in `ui.last_measurement`). Sweep = cycles of 0 → max → min → 0 (no other shapes: the user's separate Keithley program covers more). Inputs follow the usual convention: max/min in V, step in mV; values rounded to the SR570's 1 mV.
 - Resolution: analysis of existing maps only (no fine line scan). Fit R = A + B·erf((x−x0)/(√2σ)); FWHM = 2.355σ, 10–90 % = 2.563σ.
@@ -96,7 +107,7 @@ The simulators live in `instruments.py` and `accessories.py`, with `SimWorld` ho
 Before handing over a version, run the self-test:
 
 ```
-python tools/selftest.py out      # names, power setting, maps (step, fly), window
+python tools/selftest.py out      # names, power setting, maps, series, sweeps, lines, calibration, I-V, resolution, window
 ```
 
 It needs the libraries from `requirements.txt`; without PyQt5 it skips the window part. On every push to `main`, GitHub runs it on Windows (workflow *Self-test*) and pushes `selftest_log.txt`, the figures and screenshots of the window to the branch `selftest-results` (`git fetch origin selftest-results`), so the results can be looked at even without a Windows PC. Look at the screenshots, not only at "passed".
@@ -111,8 +122,9 @@ It needs the libraries from `requirements.txt`; without PyQt5 it skips the windo
 ## Status and branches
 
 - `main`: **1.0** (0.9.0 + the fixes from the first lab test). Released; this is what the lab uses.
-- `next`: 1.1 in testing (quick I–V, resolution). Becomes one commit "SPCM 1.1.0" on `main` once the user has tested it.
-- `experimental-0.10`: point sweeps, line scans, camera calibration (0.10.0 pre-release). Tested in simulation only; the user considers it highly experimental. Don't merge it into `main` without asking. If features from it are wanted, bring them over one at a time onto `main`, keeping the 1.0 decisions above (e.g. the 2 mV one-direction power setting).
+- `next`: 1.1.x in testing (quick I–V, resolution, bug fixes). Becomes one commit "SPCM 1.1.x" on `main` once tested.
+- `dev`: 1.2 in testing (camera calibration, line scans, bias / power series, point sweeps), built on `next`.
+- `experimental-0.10`: the old experimental line (0.10.0). Its useful features were rebuilt on 1.x in 1.2; don't merge it.
 - Each released version is one commit on `main` ("SPCM x.y.z"), with a tag `vx.y.z`.
 
 ## Working with the user
