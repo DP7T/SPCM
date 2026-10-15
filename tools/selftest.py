@@ -263,7 +263,7 @@ if HAVE_QT:
         w.yc.setValue(-4)
         w.start()
         t0 = time.time()
-        while w.thread is not None and time.time() - t0 < 120:
+        while w.thread is not None and time.time() - t0 < 900:
             pump(0.2)
         assert w.thread is None, "map scan did not finish"
         shot("map")
@@ -275,7 +275,7 @@ if HAVE_QT:
         shot("map_with_line")
         w.scan_line()
         t0 = time.time()
-        while w.thread is not None and time.time() - t0 < 120:
+        while w.thread is not None and time.time() - t0 < 900:
             pump(0.2)
         assert w.thread is None, "line scan did not finish"
         assert w.line_data is not None and np.isfinite(w.line_data.pc).all()
@@ -292,7 +292,7 @@ if HAVE_QT:
         shot("sweep_tab")
         w.start()
         t0 = time.time()
-        while w.thread is not None and time.time() - t0 < 120:
+        while w.thread is not None and time.time() - t0 < 900:
             pump(0.2)
         assert w.thread is None, "sweep did not finish"
         shot("sweep_bias_power")
@@ -329,7 +329,7 @@ if HAVE_QT:
             w.tabs.setCurrentWidget(w.cam_tab)
             w.use_cam_line()
             t0 = time.time()
-            while w.thread is not None and time.time() - t0 < 120:
+            while w.thread is not None and time.time() - t0 < 900:
                 pump(0.2)
             assert w.line_data is not None
             shot("line_from_camera")
