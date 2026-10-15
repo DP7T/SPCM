@@ -191,6 +191,8 @@ def _():
                                    amp_value=1e-6, sample=f"selftest_line_{outer}")
         d = load(run_worker(ScanWorker(HW, s, OUT)))
         assert d.pc.shape[:2] == (len(vals), 1) and np.isfinite(d.pc).all(), outer
+        dist, _, _ = linescan.geometry(d)
+        assert dist[0] == 0 and dist[-1] > 17, "distance must run 0 -> length"
         linescan.export_csv(d)
         linescan.save_all(d)
     HW.lockin_pc.set_sine_amplitude(1.0)

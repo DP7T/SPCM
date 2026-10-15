@@ -305,9 +305,13 @@ class ScanData:
         ux = (-1 if s.flip_x else 1) * (self.xs - ox) + 0.0
         vy = (-1 if s.flip_y else 1) * (self.ys - oy) + 0.0
         ix, iy = np.argsort(ux), np.argsort(vy)
+        line = getattr(s, "scan_type", "map") == "line"
+        if line:                         # a line keeps its order: start -> end
+            ix, iy = np.arange(len(self.xs)), np.arange(len(self.ys))
         view = np.ix_(iy, ix)
         with h5py.File(path, "w") as f:
             f.attrs["format"] = "SPCM v2 (one group per map)"
+            f.attrs["scan_type"] = "line" if line else "map"
             f.attrs["sample"] = s.sample
             f.attrs["signal"] = kind
             f.attrs["started"] = self.started
@@ -337,6 +341,13 @@ class ScanData:
                         g.attrs[k] = v
                 g["x_um"], g["y_um"] = ux[ix], vy[iy]
                 g.attrs["angle_deg"] = getattr(s, "angle_deg", 0.0)
+                if line:
+                    X, Y = s.rotate_xy(self.xs, np.full(len(self.xs), self.ys[0]))
+                    g["distance_um"] = self.xs - self.xs[0]
+                    g["line_x_um"] = (-1 if s.flip_x else 1) * (X - ox) + 0.0
+                    g["line_y_um"] = (-1 if s.flip_y else 1) * (Y - oy) + 0.0
+                    g.attrs["note"] = ("line scan: images have 1 row; columns follow "
+                                       "the line from start to end (distance_um)")
                 for c, ch in enumerate(CHANNELS):
                     nm = ch if c < 3 else "theta_deg"
                     d = g.create_dataset(f"photocurrent_{nm}",
