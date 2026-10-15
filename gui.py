@@ -799,7 +799,9 @@ class MainWindow(QtWidgets.QMainWindow):
         bar.addWidget(auto)
         bar.addStretch(1)
         right.addLayout(bar)
-        bar = QtWidgets.QHBoxLayout()           # second row: tools drawn on the maps
+        self.map_tools = QtWidgets.QWidget()    # second row: tools drawn on the maps
+        bar = QtWidgets.QHBoxLayout(self.map_tools)
+        bar.setContentsMargins(0, 0, 0, 0)
         self.rois, self._roi_sync = [], False
         self.frame_btn = QtWidgets.QPushButton("Draw scan frame")
         self.frame_btn.setCheckable(True)
@@ -856,7 +858,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "timing and series come from the Map tab.\n"
             "• Draw ▸ Resolution line: put it across a sharp edge on the reflection map; the "
             "spot size (FWHM) is fitted."))
-        right.addLayout(bar)
+        right.addWidget(self.map_tools)
 
         self.tabs = QtWidgets.QTabWidget()
         right.addWidget(self.tabs, 1)
@@ -894,6 +896,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.plot_stack.addWidget(self.sweep_view)
         self.sweep_data = None
         self.side_tabs.currentChanged.connect(self._side_tab_changed)
+        # the map drawing tools only show with the maps
+        self.tabs.currentChanged.connect(
+            lambda *_: self.map_tools.setVisible(self.tabs.currentIndex() == 0))
         for p in (self.pc_panel, self.r_panel):
             p.clicked.connect(self.goto)
 
@@ -2197,7 +2202,7 @@ class MainWindow(QtWidgets.QMainWindow):
                                 "The mean is saved, and the spread (standard deviation) "
                                 "as the error bar.")
         f.addRow("Readings per point", self.sw_navg)
-        self.sw_restore = QtWidgets.QCheckBox("Put the SINE OUT (laser power) back afterwards")
+        self.sw_restore = QtWidgets.QCheckBox("Put the SINE OUT back afterwards")
         self.sw_restore.setChecked(bool(sw.get("restore_power", True)))
         f.addRow(self.sw_restore)
         self.sw_note = QtWidgets.QLabel()
