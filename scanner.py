@@ -218,7 +218,7 @@ class ScanData:
             photocurrent_X/_Y/_R  converted signal (A or V), photocurrent_theta_deg
             reflection_X/_Y/_R, reflection_theta_deg
             raw/                  lock-in readings as measured (rms)
-        /power_log            laser power after every line (columns as datasets)
+        /power_log            2 columns: time (s), laser power on the sample (µW)
         Every image: rows = y, columns = x, same orientation as on screen."""
         import h5py
         self.path = path
@@ -257,12 +257,7 @@ class ScanData:
                     if v is not None and not isinstance(v, (list, dict)):
                         g.attrs[k] = v
                 g["x_um"], g["y_um"] = ux[ix], vy[iy]
-                g["x_stage_um"], g["y_stage_um"] = self.xs[ix], self.ys[iy]
                 g.attrs["angle_deg"] = getattr(s, "angle_deg", 0.0)
-                if getattr(s, "angle_deg", 0.0):
-                    XX, YY = np.meshgrid(self.xs[ix], self.ys[iy])
-                    RX, RY = s.rotate_xy(XX, YY)
-                    g["X_stage_um_2d"], g["Y_stage_um_2d"] = RX, RY   # true positions
                 for c, ch in enumerate(CHANNELS):
                     nm = ch if c < 3 else "theta_deg"
                     d = g.create_dataset(f"photocurrent_{nm}",
@@ -289,12 +284,10 @@ class ScanData:
                         g.attrs["meter_to_sample_ratio"] = pm.get("sample_factor", 1.0)
             if self.power_log:
                 pl = np.array(self.power_log, float)
-                g = f.create_group("power_log")
-                g.attrs["note"] = "laser power after every scan line"
-                for c, name in enumerate(("map", "line", "time_s", "power_uW",
-                                          "sine_amplitude_V", "power_on_sample_uW")):
-                    if c < pl.shape[1]:
-                        g[name] = pl[:, c]
+                ds = f.create_dataset("power_log", data=pl[:, [2, 5]])
+                ds.attrs["columns"] = "time_s, power_on_sample_uW"
+                ds.attrs["note"] = ("laser power on the sample after every scan line; "
+                                    "column 1 time (s), column 2 power (µW)")
 
 
 def update_experiment(path, conditions, notes):
@@ -339,16 +332,21 @@ def export_csv(d):
                 m = (arr[ib, :, :, c] * (f_ if c < 3 else 1.0))[np.ix_(iy, ix)]
                 uu = u if c < 3 else "deg"
                 with open(os.path.join(sub, f"{name}_{ch}.csv"), "w") as fh:
-                    fh.write(f"# {name} {ch} [{uu}]; rows: y (um), columns: x (um), "
-                             f"measured from the origin (0,0) = stage ({ox:.3f}, {oy:.3f}) um\n")
-                    fh.write("y\\x," + ",".join(f"{x:.4f}" for x in ux[ix]) + "\n")
-                    for r, y in enumerate(vy[iy]):
-                        fh.write(f"{y:.4f}," + ",".join(
-                            "" if not np.isfinite(v) else f"{v:.6e}" for v in m[r]) + "\n")
+                    for r in range(m.shape[0]):     # numbers only (axes: info.txt)
+                        fh.write(",".join("" if not np.isfinite(v) else f"{v:.6e}"
+                                          for v in m[r]) + "\n")
     with open(os.path.join(out, "info.txt"), "w", encoding="utf-8") as fh:
         s = d.settings
         fh.write(f"Sample: {s.sample}\nStarted: {d.started}\nCompleted: {d.completed}\n")
-        fh.write(f"Photocurrent conversion: {formula} [{unit}]\n\n")
+        fh.write(f"Photocurrent conversion: {formula} [{unit}]\n")
+        fh.write("\nCSV files: plain matrices of numbers. Row = y, column = x, first row "
+                 "= lowest y (as on screen). Photocurrent in "
+                 f"{unit}, reflection in V, theta in degrees.\n")
+        fh.write(f"x (µm, from the origin), one value per column: "
+                 + ", ".join(f"{x:.4f}" for x in ux[ix]) + "\n")
+        fh.write(f"y (µm, from the origin), one value per row: "
+                 + ", ".join(f"{y:.4f}" for y in vy[iy]) + "\n")
+        fh.write(f"Origin (0, 0) = stage ({ox:.3f}, {oy:.3f}) µm\n\n")
         fh.write("Experiment:\n")
         for k, v in (s.conditions or {}).items():
             fh.write(f"  {k}: {v}\n")
@@ -366,9 +364,9 @@ def export_csv(d):
                     for k, v in vals.items() if k != "time") + "\n")
         fh.write(f"\nInstruments: {json.dumps(d.hw_info)}\n")
     if d.power_log:
-        np.savetxt(os.path.join(out, "power_log.csv"), np.array(d.power_log, float),
-                   delimiter=",", header="map,line,time_s,power_uW,sine_amplitude_V,"
-                   "power_on_sample_uW", comments="")
+        np.savetxt(os.path.join(out, "power_log.csv"),
+                   np.array(d.power_log, float)[:, [2, 5]], delimiter=",",
+                   header="time_s,power_on_sample_uW", comments="")
     return out
 
 
@@ -391,7 +389,13 @@ def load(path):
             maps = sorted((k for k in f if re.match(r"map\d+", k)),
                           key=lambda k: int(re.match(r"map(\d+)", k).group(1)))
             g0 = f[maps[0]]
-            d.xs, d.ys = g0["x_stage_um"][()], g0["y_stage_um"][()]
+            if "x_stage_um" in g0:                         # files before 0.10
+                d.xs, d.ys = g0["x_stage_um"][()], g0["y_stage_um"][()]
+            else:                                          # from the origin + axes
+                st = d.settings
+                ox, oy = (float(v) for v in info.attrs["origin_stage_um"])
+                d.xs = ox + (-1 if st.flip_x else 1) * g0["x_um"][()]
+                d.ys = oy + (-1 if st.flip_y else 1) * g0["y_um"][()]
             nb, ny, nx = len(maps), len(d.ys), len(d.xs)
             d.pc = np.full((nb, ny, nx, 4), np.nan)
             d.refl = np.full((nb, ny, nx, 4), np.nan)
@@ -414,10 +418,16 @@ def load(path):
                             "image": g[f"camera_{when}"][()]}
             if "power_log" in f:
                 pg_ = f["power_log"]
-                cols = [pg_[c][()] for c in ("map", "line", "time_s", "power_uW",
-                                             "sine_amplitude_V", "power_on_sample_uW")
-                        if c in pg_]
-                d.power_log = np.column_stack(cols).tolist() if cols else []
+                if hasattr(pg_, "keys"):                   # files before 0.10
+                    cols = [pg_[c][()] for c in ("map", "line", "time_s", "power_uW",
+                                                 "sine_amplitude_V", "power_on_sample_uW")
+                            if c in pg_]
+                    d.power_log = np.column_stack(cols).tolist() if len(cols) == 6 else []
+                else:
+                    a = np.asarray(pg_[()], float)
+                    nan = np.full(len(a), np.nan)
+                    d.power_log = np.column_stack([nan, nan, a[:, 0], nan, nan,
+                                                   a[:, 1]]).tolist()
             d.power_lock = json.loads(info.attrs.get("laser_power_setting",
                                                      info.attrs.get("power_lock", "{}")))
         else:                                             # ---- older files
@@ -485,64 +495,84 @@ class SafeStage:
                 "Please send spcm_stage.log from the program folder.")
 
 
+SINE_STEP_V = 0.002       # SR830 SINE OUT resolution
+
+
 def set_laser_power(pm, lockin, target_W, tol_pct=1.0, max_amp=5.0,
-                    status=None, stop=None, max_iter=20):
-    """Adjust the lock-in SINE OUT amplitude until the power ON THE SAMPLE
-    (meter / ratio) is within tol_pct of target_W. Nothing else is touched.
-    Returns dict(ok, message, power_uW, target_uW, amplitude_V)."""
+                    status=None, stop=None, no_light_V=0.5):
+    """Bring the power ON THE SAMPLE (meter / ratio) to target_W by changing
+    the lock-in SINE OUT amplitude in 2 mV steps, always in ONE direction
+    (up if the power is too low, down if too high), never up and down.
+
+    tol_pct > 0: stop as soon as the power is within ± tol_pct of the target.
+    tol_pct = 0: stop at the first step that reaches the target, and keep
+                 whichever of the last two steps is closer (point sweeps).
+    stop(): returns True to abort; the amplitude then stays where it is.
+    Returns dict(ok, aborted, message, power_uW, target_uW, amplitude_V)."""
     status = status or (lambda m: None)
     stop = stop or (lambda: False)
     ratio = getattr(pm, "sample_factor", 1.0) or 1.0
     n = getattr(pm, "averages", 10) or 10
-    settle = 0.25 + 2 * n * 0.003
+    settle = 0.05 + n * 0.003
 
-    def read():
+    def read(k=1):
         vals = []
-        for _ in range(3):
+        for i in range(k):
             vals.append(pm.power() / ratio)
-            time.sleep(n * 0.003)
+            if i < k - 1:
+                time.sleep(n * 0.003)
         return float(np.median(vals))
 
+    def result(ok, p, amp, msg, aborted=False):
+        return {"ok": ok, "aborted": aborted, "power_uW": p * 1e6,
+                "target_uW": target_W * 1e6, "amplitude_V": round(amp, 4), "message": msg}
+
+    def close_enough(p):
+        return tol_pct > 0 and abs(p / target_W - 1) * 100 <= tol_pct
+
     amp = lockin.sine_amplitude()
-    p = read()
-    best = (abs(p / target_W - 1), p, amp)
-    for it in range(max_iter):
+    p = read(3)
+    if close_enough(p):
+        return result(True, p, amp, f"Laser power already right: {p * 1e6:.3g} µW on "
+                                    f"sample (target {target_W * 1e6:.3g} µW, sine {amp:.3f} V)")
+    direction = 1 if p < target_W else -1
+    start_amp = amp
+    prev = (p, amp)
+    while True:
         if stop():
-            break
-        err = p / target_W - 1
-        status(f"Setting laser power: {p * 1e6:.2f} µW on sample "
-               f"(target {target_W * 1e6:.2f} µW, sine {amp:.3f} V)")
-        if abs(err) * 100 <= tol_pct:
-            return {"ok": True, "power_uW": p * 1e6, "target_uW": target_W * 1e6,
-                    "amplitude_V": amp,
-                    "message": f"Laser power set: {p * 1e6:.2f} µW on sample "
-                               f"(target {target_W * 1e6:.2f} µW ± {tol_pct:g} %, "
-                               f"sine {amp:.3f} V)"}
-        if p <= 5e-9:                         # essentially no light on the meter
-            return {"ok": False, "power_uW": p * 1e6, "target_uW": target_W * 1e6,
-                    "amplitude_V": amp,
-                    "message": "Laser power not set: the power meter reads almost "
-                               "nothing. Is the laser on and the shutter open?"}
-        factor = float(np.clip(target_W / p, 0.5, 2.0))
-        new = float(np.clip(amp * (1 + 0.85 * (factor - 1)), 0.004, max_amp))
-        if abs(new - amp) < 0.002:              # SR830 resolution reached
-            break
+            return result(False, p, amp, f"Laser power setting aborted at sine {amp:.3f} V "
+                                         f"({p * 1e6:.3g} µW on sample).", aborted=True)
+        new = round((amp + direction * SINE_STEP_V) / SINE_STEP_V) * SINE_STEP_V
+        if new > max_amp + 1e-9 or new < 0.004 - 1e-9:
+            return result(False, p, amp,
+                          f"Laser power not reached: {p * 1e6:.3g} µW on sample at sine "
+                          f"{amp:.3f} V, the {'maximum' if direction > 0 else 'minimum'} "
+                          f"allowed (target {target_W * 1e6:.3g} µW).")
         amp = lockin.set_sine_amplitude(new)
         time.sleep(settle)
-        p = read()
-        if abs(p / target_W - 1) < best[0]:
-            best = (abs(p / target_W - 1), p, amp)
-        if amp >= max_amp and p < target_W:
-            return {"ok": False, "power_uW": p * 1e6, "target_uW": target_W * 1e6,
-                    "amplitude_V": amp,
-                    "message": f"Laser power not reached: {p * 1e6:.2f} µW at the maximum "
-                               f"sine amplitude ({max_amp:g} V)."}
-    _, p, amp = best
-    lockin.set_sine_amplitude(amp)
-    return {"ok": abs(p / target_W - 1) * 100 <= tol_pct, "power_uW": p * 1e6,
-            "target_uW": target_W * 1e6, "amplitude_V": amp,
-            "message": f"Laser power set as close as possible: {p * 1e6:.2f} µW on sample "
-                       f"(target {target_W * 1e6:.2f} µW, sine {amp:.3f} V)"}
+        near = abs(p / target_W - 1) < 0.1
+        p = read(3 if near else 1)
+        status(f"Setting laser power: {p * 1e6:.3g} µW on sample (target "
+               f"{target_W * 1e6:.3g} µW), sine {amp:.3f} V")
+        if close_enough(p):
+            return result(True, p, amp, f"Laser power set: {p * 1e6:.3g} µW on sample "
+                                        f"(target {target_W * 1e6:.3g} µW ± {tol_pct:g} %, "
+                                        f"sine {amp:.3f} V)")
+        if direction * (p - target_W) >= 0:          # reached / just passed the target
+            if abs(prev[0] - target_W) < abs(p - target_W):
+                p, amp = prev[0], lockin.set_sine_amplitude(prev[1])   # one step back
+                time.sleep(settle)
+            ok = tol_pct == 0 or close_enough(p)
+            return result(ok, p, amp,
+                          f"Laser power set{'' if ok else ' as close as possible'}: "
+                          f"{p * 1e6:.3g} µW on sample (target {target_W * 1e6:.3g} µW, "
+                          f"{(p / target_W - 1) * 100:+.1f} %, sine {amp:.3f} V)")
+        if direction > 0 and p <= 5e-9 and amp - start_amp >= no_light_V:
+            return result(False, p, amp,
+                          "Laser power not set: the power meter still reads almost nothing "
+                          f"after raising the sine by {amp - start_amp:.2f} V. Is the laser "
+                          "on and the shutter open?")
+        prev = (p, amp)
 
 
 class PowerSetter(QtCore.QObject):
@@ -553,10 +583,15 @@ class PowerSetter(QtCore.QObject):
     def __init__(self, pm, lockin, target_W, tol_pct, max_amp=5.0):
         super().__init__()
         self.args = (pm, lockin, target_W, tol_pct, max_amp)
+        self._stop = False
+
+    def stop(self):
+        self._stop = True
 
     def run(self):
         try:
-            self.done.emit(set_laser_power(*self.args, status=self.status.emit))
+            self.done.emit(set_laser_power(*self.args, status=self.status.emit,
+                                           stop=lambda: self._stop))
         except Exception as e:
             self.done.emit(f"Setting the power failed: {e}")
 
@@ -624,17 +659,19 @@ class ScanWorker(QtCore.QObject):
     failed = QtCore.Signal(str)
     notify = QtCore.Signal(str, str)                      # message, level (info/warn)
 
-    def __init__(self, hw, settings, save_dir, lock_cfg=None):
+    def __init__(self, hw, settings, save_dir, lock_cfg=None, name=None):
         super().__init__()
         self.hw, self.s, self.save_dir = hw, settings, save_dir
         self.lock_cfg = lock_cfg or {}
         self.pm = next((a for a in hw.accessories if a.name == "powermeter"), None)
         self._stop = False
         self.data = ScanData(settings, hw.describe())
-        os.makedirs(save_dir, exist_ok=True)
-        stamp = time.strftime("%Y%m%d_%H%M%S")
-        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in settings.sample)
-        self.path = os.path.join(save_dir, f"{stamp}_{safe}.h5")
+        import naming
+        # its own folder: <save_dir>/<name>/<name>.h5 (+ PNG and CSV next to it)
+        self.path = naming.measurement_path(save_dir, name or naming.default_name(
+            settings.sample, "line" if getattr(settings, "scan_type", "map") == "line"
+            else ""))
+        self.data.path = self.path
 
     def stop(self):
         self._stop = True
@@ -869,8 +906,10 @@ class ScanWorker(QtCore.QObject):
                                       s.power_tol_pct, self.lock_cfg.get("max_amplitude_V", 5.0),
                                       status=self.status.emit, stop=lambda: self._stop)
                 d.power_lock = {"power_set": res}
+                if res.get("aborted") or self._stop:
+                    raise InterruptedError(res["message"])
                 self.notify.emit(res["message"], "info" if res["ok"] else "warn")
-                if not res["ok"] and "not" in res["message"].split(":")[0]:
+                if res["message"].startswith("Laser power not"):
                     raise RuntimeError(res["message"])
             t_start = time.time()
             self._t = {"move": 0.0, "wait": 0.0, "read": 0.0, "n": 0}
@@ -955,7 +994,17 @@ class ScanWorker(QtCore.QObject):
             d.save(self.path)
             self.finished.emit(self.path)
         except InterruptedError:
-            self.finished.emit(self.path)
+            # stopped before any data was taken (laser power setting, fly-scan set-up)
+            try:
+                if not np.isfinite(d.pc).any():
+                    if os.path.exists(self.path):
+                        os.remove(self.path)
+                    folder = os.path.dirname(self.path)
+                    if os.path.isdir(folder) and not os.listdir(folder):
+                        os.rmdir(folder)
+            except OSError:
+                pass
+            self.finished.emit("" if not np.isfinite(d.pc).any() else self.path)
             return
         except Exception:
             try:

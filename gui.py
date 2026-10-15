@@ -666,13 +666,47 @@ class MainWindow(QtWidgets.QMainWindow):
         self.folder = QtWidgets.QLineEdit(config.get("save_dir", "data"))
         f.addRow("Sample", self.sample)
         f.addRow("Folder", self.folder)
+        import naming
+        row = QtWidgets.QHBoxLayout()
+        self.name_pat = QtWidgets.QComboBox()
+        self.name_pat.setEditable(True)
+        self.name_pat.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.name_pat.setMinimumContentsLength(10)
+        pats = [d.get("file_pattern") or naming.DEFAULT_PATTERN, naming.DEFAULT_PATTERN,
+                "{sample}_{date}_{n}", "{date}_{sample}_{size}_{step}_{n}",
+                "{sample}_{date}_{size}_{step}_{power}_{bias}_{n}"]
+        for p_ in dict.fromkeys(pats):
+            self.name_pat.addItem(p_)
+        self.name_pat.setToolTip(
+            "How measurements are named. Each one gets its own folder with this name, "
+            "holding the .h5, the PNG and the CSV folder.\nUse 'Add' to insert fields, "
+            "including the quantities from the Experiment notes tab (e.g. {Temperature}). "
+            "{n} is a running number: 001, 002 …")
+        add = QtWidgets.QToolButton()
+        add.setText("Add ▾")
+        add.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.name_menu = QtWidgets.QMenu(add)
+        add.setMenu(self.name_menu)
+        self.name_menu.aboutToShow.connect(self._fill_name_menu)
+        row.addWidget(self.name_pat, 1)
+        row.addWidget(add)
+        f.addRow("File name", row)
+        self.name_preview = QtWidgets.QLabel()
+        self.name_preview.setWordWrap(True)
+        self.name_preview.setStyleSheet("color:gray")
+        f.addRow(self.name_preview)
+        self.name_pat.editTextChanged.connect(self._name_changed)
+        self.sample.textChanged.connect(self._name_changed)
         left.addWidget(g)
 
         row = QtWidgets.QHBoxLayout()
         self.start_btn = QtWidgets.QPushButton("Start scan")
         self.start_btn.setStyleSheet("font-weight:bold; padding:8px")
         self.stop_btn = QtWidgets.QPushButton("Stop && save")
-        self.stop_btn.setToolTip("Stop after the current pixel and keep what was measured")
+        self.stop_btn.setToolTip("Stop after the current pixel and keep what was measured. "
+                                 "While the laser power is being set before a scan, this "
+                                 "aborts the power setting (the sine stays where it is).")
         self.stop_btn.setEnabled(False)
         self.discard_btn = QtWidgets.QPushButton("Stop && discard")
         self.discard_btn.setToolTip("Stop and delete this scan (nothing is saved)")
@@ -766,6 +800,14 @@ class MainWindow(QtWidgets.QMainWindow):
             w.currentIndexChanged.connect(self._amp_changed)
         self.amp_gain.currentIndexChanged.connect(self._amp_changed)
         self._amp_changed()
+        for w in (self.xs_, self.ys_, self.step):
+            w.valueChanged.connect(self._name_changed)
+        self.bias_on.toggled.connect(self._name_changed)
+        if self.pm is not None:
+            self.pm_set.toggled.connect(self._name_changed)
+            self.pm_target.valueChanged.connect(self._name_changed)
+        self.folder.textChanged.connect(self._name_changed)
+        QtCore.QTimer.singleShot(400, self._name_changed)
         QtCore.QTimer.singleShot(300, self._start_here_on_launch)
         dark = bool((self.config.get("ui", {}) or {}).get("dark", False))
         for w in self.findChildren(pg.GraphicsLayoutWidget):
@@ -958,8 +1000,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self._save_setting("power_set", k, v)
 
     def set_power_now(self):
-        """Adjust the sine amplitude now (outside a scan), in the background."""
-        if self.thread is not None or getattr(self, "ps_thread", None) is not None:
+        """Adjust the sine amplitude now (outside a scan), in the background.
+        While it runs, the same button aborts it."""
+        if getattr(self, "ps_thread", None) is not None:
+            self.ps_worker.stop()
+            self.pm_set_btn.setText("Aborting…")
+            return
+        if self.thread is not None:
             return
         from scanner import PowerSetter
         li = self._laser_lockin()
@@ -972,7 +1019,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ps_thread.started.connect(self.ps_worker.run)
         self.ps_worker.status.connect(self.statusBar().showMessage)
         self.ps_worker.done.connect(self._power_set_done)
-        self.pm_set_btn.setEnabled(False)
+        self.pm_set_btn.setText("Abort power setting")
+        self.pm_set_btn.setStyleSheet("color:#c62828; font-weight:bold")
         self.start_btn.setEnabled(False)
         self.ps_thread.start()
 
@@ -980,7 +1028,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ps_thread.quit()
         self.ps_thread.wait()
         self.ps_thread = self.ps_worker = None
-        self.pm_set_btn.setEnabled(True)
+        self.pm_set_btn.setText("Set power now")
+        self.pm_set_btn.setStyleSheet("")
         self.start_btn.setEnabled(True)
         if isinstance(res, str):
             self.toast(res, "warn")
@@ -1042,6 +1091,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.error(f"Could not set averaging:\n{e}")
 
     def show_power(self, p):
+        self._last_power_W = p
         try:
             self.pm_raw.setText(si(p, "W"))
             if self.pm.over_range(p):
@@ -1518,7 +1568,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.remember_experiment()
         self.remember_scan(s)
         self.worker = ScanWorker(self.hw, s, self.folder.text() or "data",
-                                 self.config.get("power_lock", {}) or {})
+                                 self.config.get("power_lock", {}) or {},
+                                 name=self.measurement_name("map", s))
         self.data = self.worker.data
         self._setup_views()
         for p in (self.pc_panel, self.r_panel):
@@ -1586,11 +1637,91 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker.stop()
         self.statusBar().showMessage("Stopping, the scan will be discarded…")
 
+    # -- measurement names --
+    def _fill_name_menu(self):
+        import naming
+        m = self.name_menu
+        m.clear()
+        for key, label in naming.FIELDS:
+            m.addAction(f"{label}   {{{key}}}", lambda k=key: self._insert_field(k))
+        exp = [k for k, _ in self.experiment_fields()]
+        if exp:
+            m.addSection("From the Experiment notes")
+            for k in exp:
+                m.addAction(f"{k}   {{{k}}}", lambda k=k: self._insert_field(k))
+
+    def _insert_field(self, key):
+        e = self.name_pat.lineEdit()
+        t, pos = e.text(), e.cursorPosition()
+        ins = "{" + key + "}"
+        if pos > 0 and t[pos - 1] not in "_-":
+            ins = "_" + ins
+        e.setText(t[:pos] + ins + t[pos:])
+        e.setCursorPosition(pos + len(ins))
+
+    def _name_values(self, kind, s=None):
+        """Values for the {fields} of the file name, for a map ('map'), a line
+        scan ('line') or a point sweep ('power', 'bias', 'bias_power')."""
+        import naming
+        v = {"sample": self.sample.text() or "sample",
+             "date": time.strftime("%Y%m%d"), "time": time.strftime("%H%M"),
+             "type": {"map": "map", "line": "line"}.get(kind, kind.replace("_", "") + "sweep")}
+        v.update({k: val for k, val in self.experiment_fields()})
+        try:
+            s = s or (self.settings() if kind in ("map", "line") else None)
+        except Exception:
+            s = None
+        if kind == "map" and s is not None:
+            v["size"] = f"{naming.num(s.x_size, '')}x{naming.num(s.y_size, 'um')}"
+            v["step"] = naming.num(s.step * 1000, "nm")
+            v["mode"] = s.mode
+        elif kind == "line" and s is not None:
+            v["size"] = naming.num(s.x_size, "um")
+            v["step"] = naming.num(s.step * 1000, "nm")
+            v["mode"] = "step"
+        if s is not None:
+            v["bias"] = naming.range_text([x for x in s.biases if x is not None], "V")
+        if kind in ("power", "bias_power") and s is not None:
+            v["power"] = naming.range_text(list(s.powers_uW), "uW")
+        elif kind == "bias":
+            v["power"] = self._power_now_text()
+        else:              # maps and lines: the set power, or what the meter reads now
+            tgt = getattr(s, "target_power_uW", None) if s is not None else None
+            v["power"] = naming.num(tgt, "uW") if tgt else self._power_now_text()
+        return v
+
+    def _power_now_text(self):
+        import naming
+        p = getattr(self, "_last_power_W", None)
+        if p is None or self.pm is None:
+            return ""
+        return naming.num(p / (self.pm.sample_factor or 1.0) * 1e6, "uW")
+
+    def measurement_name(self, kind, s=None):
+        import naming
+        pat = self.name_pat.currentText().strip() or naming.DEFAULT_PATTERN
+        self._save_setting("scan_defaults", "file_pattern", pat)
+        return naming.make_name(naming.pattern_for(pat, kind), self._name_values(kind, s),
+                                self.folder.text() or "data")
+
+    def _name_changed(self, *_):
+        try:
+            import naming
+            pat = self.name_pat.currentText().strip() or naming.DEFAULT_PATTERN
+            name = naming.make_name(pat, self._name_values("map"), self.folder.text() or "data")
+            self.name_preview.setText(f"next map: {name}")
+        except Exception:
+            self.name_preview.setText("")
+
     def _delete_scan_files(self, path):
         import glob
         import shutil
         base = os.path.splitext(path)[0]
-        for f in [path] + glob.glob(base + "_map*.png"):
+        folder = os.path.dirname(os.path.abspath(path))
+        if os.path.basename(folder) == os.path.basename(base):   # its own folder
+            shutil.rmtree(folder, ignore_errors=True)
+            return
+        for f in [path, base + ".png"] + glob.glob(base + "_map*.png"):
             try:
                 os.remove(f)
             except OSError:
@@ -1679,7 +1810,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.discard_btn.setEnabled(False)
         self.redraw()
 
+    def _nothing_saved(self, path):
+        """The run stopped before any data was taken (e.g. power setting aborted)."""
+        if path:
+            return False
+        self._cleanup()
+        self.statusBar().showMessage("Stopped before the measurement started - "
+                                     "nothing was saved.")
+        return True
+
     def on_finished(self, path):
+        if self._nothing_saved(path):
+            return
         done = self.data.completed
         if getattr(self, "_discard", False):
             self._cleanup()

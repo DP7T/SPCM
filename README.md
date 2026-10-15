@@ -119,8 +119,10 @@ In the window:
 - The **Camera** tab shows a live view with an exposure setting. Drag the cyan cross onto the laser spot once to mark it. Camera pictures are not saved with the scans.
 
 **Setting the laser power.** In the power box, enter **Target on sample (µW)** and a **Tolerance** (± 1 % by default):
-- Tick **Set the laser power before each scan**. When you press Start, the stage goes to the scan's start position. The lock-in's **SINE OUT amplitude** is then adjusted step by step until the power on the sample (meter ÷ ratio) is within the tolerance, and only then does the scan begin. You get a notification with the result.
-- **Set power now** does the same immediately, without scanning.
+- The program reads the power on the sample (meter ÷ ratio) and changes the lock-in **SINE OUT** in **2 mV steps, always in one direction**: up if the power is too low, down if it is too high. It never goes up and down. It stops as soon as the power is within the tolerance. If one 2 mV step jumps past the tolerance band, it keeps the closer of the last two steps.
+- **Set power now** does this immediately. While it runs, the same button reads **Abort power setting**: press it to stop, and the sine stays where it is.
+- Tick **Set the laser power before each scan** to do it at the scan's start position every time you press Start. The scan only begins once the power is right. **Stop & save** aborts the power setting; then nothing is measured or saved.
+- Large changes take a while, because every 2 mV step is read: about 0.1–0.2 s per step, so 1 V takes 1–2 minutes.
 - Nothing is changed during the scan, but the power is still recorded after every line and at the start and end of each map.
 - If the target can't be reached, the scan doesn't start and you're told why: either the meter sees no light (laser off, shutter closed), or the target is above what the maximum sine amplitude gives. The amplitude never goes above **"Never set SINE OUT above"** in Settings (5 V by default; set a lower value to protect your laser). Settings also has which SR830's SINE OUT drives the laser.
 - The power meter also sees some light reflected back from the sample. So set the power with the start position on a uniform area, such as substrate.
@@ -139,19 +141,26 @@ In the window:
 
 ## Opening your data
 
-Every scan gives you:
-- **`…_map0.png`**: a ready-made figure for each map. On the left is the photocurrent or photovoltage map (blue–white–red, symmetric around zero, with a colour bar in nA, µV, etc.); on the right is the reflection map in grey. The title follows your setup: **Photocurrent** with the SR570, **Photovoltage** with the SR560, and with the lock-in alone it depends on its input (current input → photocurrent, A or A−B → photovoltage). **File → Save figure of shown map…** saves the map currently shown as PNG, PDF or SVG. It uses your Manual colour limits if you set them.
-- **`YYYYMMDD_HHMMSS_sample.h5`**: everything in one file (all maps, raw and converted, settings, notes, power log, camera images). Open it with:
+**Every measurement gets its own folder** inside the save folder, named like the measurement. By default the name is
+
+`sample_date_size_step_power_number`, for example `flakeA_20261015_20x20um_500nm_10uW_001`
+
+- **File name** (Save box): pick another pattern from the list or type your own. **Add ▾** inserts fields: sample, date, time, size, step, power on the sample, bias, scan mode, type and the running number `{n}`. It also offers every quantity from the **Experiment notes** tab, such as `{Temperature}` or `{Polarization}`. The grey line under it shows the next name.
+- The power in the name is the target power if *Set the laser power before each scan* is ticked, otherwise what the meter reads at the start. `{n}` counts up (001, 002 …) so a name is never used twice.
+
+Inside each measurement folder:
+- **`<name>_map0.png`**: a ready-made figure for each map. On the left is the photocurrent or photovoltage map (blue–white–red, symmetric around zero, with a colour bar in nA, µV, etc.); on the right is the reflection map in grey. The title follows your setup: **Photocurrent** with the SR570, **Photovoltage** with the SR560, and with the lock-in alone it depends on its input (current input → photocurrent, A or A−B → photovoltage). **File → Save figure of shown map…** saves the map currently shown as PNG, PDF or SVG. It uses your Manual colour limits if you set them.
+- **`<name>.h5`**: everything in one file (all maps, raw and converted, settings, notes, power log). Open it with:
   - SPCM itself: **File → Open saved scan…**
-  - **HDFView**: free from the HDF Group; double-click any dataset to see it as a table or image.
   - **Origin**: *Data → Import → HDF5*.
+  - **HDFView**: free from the HDF Group; double-click any dataset to see it as a table or image.
   - **Python / MATLAB**: `h5py` or `h5read`.
-- **`YYYYMMDD_HHMMSS_sample_csv/`**: the same maps as plain CSV files, which open in **Excel, Origin or any program**:
+- **`<name>_csv/`**: the same data as plain CSV files, which open in **Origin, Excel or any program**:
   - one folder per map (per bias value)
   - `photocurrent_X.csv`, `_Y`, `_R`, `_theta`: photocurrent, already converted, in A or V
   - `reflection_*.csv`: reflection as read
-  - Each file is a matrix: first row = x (µm), first column = y (µm).
-  - `info.txt` holds all settings, experiment notes and laser powers, and `power_log.csv` the per-line powers.
+  - Each file holds **only the lock-in values**, as a matrix: one row per y, one column per x, the first row being the lowest y (as on screen). The x and y positions are listed in `info.txt`.
+  - `info.txt` also holds all settings, experiment notes and laser powers, and `power_log.csv` the power on the sample after every line (time, power).
   - For an older .h5 file, open it and use **File → Export shown scan to CSV…**.
 
 ## Data file layout (`.h5`)
@@ -165,14 +174,12 @@ Every image in the file is a plain 2-D array (rows = y, columns = x), in the sam
   attributes:               bias, τ and sensitivity of both lock-ins, wait time,
                             laser power at start/end (µW, meter and on sample) …
   x_um, y_um                axes from the origin (0, 0)
-  x_stage_um, y_stage_um    the same positions in stage coordinates
   photocurrent_X / _Y / _R  converted signal (A or V; the 'unit' attribute says which)
   photocurrent_theta_deg
   reflection_X / _Y / _R, reflection_theta_deg
   raw/                      lock-in readings exactly as measured (rms)
-  camera_start, camera_end  camera pictures (if the camera is on)
-/power_log                  laser power after every line: map, line, time_s,
-                            power_uW, sine_amplitude_V, power_on_sample_uW
+/power_log                  2 columns: time (s), laser power on the sample (µW),
+                            one row per scan line - plot column 2 against column 1
 ```
 
 ```python
