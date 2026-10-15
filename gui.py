@@ -384,6 +384,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return lay
 
         scan_lay = page("Scan")
+        iv_lay = page("Quick I–V")
         inst_lay = page("Instruments")
         left = scan_lay
 
@@ -659,6 +660,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.pm_poller.start()
 
         inst_lay.addStretch(1)
+        self.build_iv_tab(iv_lay)
         left = scan_lay
         g = QtWidgets.QGroupBox("Save")
         f = QtWidgets.QFormLayout(g)
@@ -756,6 +758,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.use_frame_btn.clicked.connect(self.use_frame)
         bar.addWidget(self.frame_btn)
         bar.addWidget(self.use_frame_btn)
+        bar.addSpacing(12)
+        self.res_rois, self.res_dialog = [], None
+        self.res_btn = QtWidgets.QPushButton("Measure resolution")
+        self.res_btn.setCheckable(True)
+        self.res_btn.setToolTip(
+            "Draws a line on the reflection map. Put it across a sharp edge (e.g. a gold "
+            "electrode); the reflection profile is fitted and the spot size (FWHM) shown. "
+            "Drag the side handle to average over a wider band.")
+        self.res_btn.toggled.connect(self.toggle_resolution)
+        bar.addWidget(self.res_btn)
         bar.addStretch(1)
         right.addLayout(bar)
 
@@ -772,6 +784,15 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.cam is not None:
             self.tabs.addTab(self.build_camera_tab(), "Camera")
         self.tabs.addTab(self.build_experiment_tab(), "Experiment notes")
+        self.iv_plot = pg.PlotWidget()
+        self.iv_plot.setLabel("bottom", "Bias", units="V")
+        self.iv_plot.setLabel("left", "Current", units="A")
+        self.iv_plot.showGrid(x=True, y=True, alpha=0.25)
+        self.iv_plot.addLegend(offset=(10, 10))
+        self.iv_data = None
+        self.tabs.addTab(self.iv_plot, "I–V")
+        self.side_tabs.currentChanged.connect(
+            lambda i: self.start_btn.setText("Start I–V" if i == 1 else "Start scan"))
         for p in (self.pc_panel, self.r_panel):
             p.clicked.connect(self.goto)
         hint = QtWidgets.QLabel("Double-click a map to move the laser there (when idle). "
@@ -782,6 +803,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         for w in (self.ch_pc, self.ch_r, self.map_sel):
             w.currentIndexChanged.connect(self.redraw)
+        for w in (self.ch_r, self.map_sel):
+            w.currentIndexChanged.connect(lambda *_: self.update_resolution())
         for w in (self.xs_, self.ys_, self.step, self.settle, self.extra):
             w.valueChanged.connect(self.update_eta)
         self.bias_on.toggled.connect(self.update_eta)
@@ -1537,15 +1560,296 @@ class MainWindow(QtWidgets.QMainWindow):
         ix, iy = np.argsort(u), np.argsort(v)
         return u[ix], v[iy], ix, iy
 
+    # ---------------------------------------------------------------- quick I-V
+    def build_iv_tab(self, lay):
+        ivc = self.config.get("iv", {}) or {}
+
+        def sp(v, lo, hi, dec, scale, unit, step=1.0):
+            w = SISpinBox(scale, unit)
+            w.setRange(lo, hi)
+            w.setDecimals(dec)
+            w.setSingleStep(step)
+            w.setValue(v)
+            return w
+        g = QtWidgets.QGroupBox("Sweep: cycles of 0 → max → min → 0")
+        f = QtWidgets.QFormLayout(g)
+        lim = float(getattr(self.hw.bias, "max_abs_V", 5.0))
+        self.iv_max = sp(float(ivc.get("v_max", 1.0)), 0, lim, 3, 1.0, "V", 0.1)
+        self.iv_min = sp(float(ivc.get("v_min", -1.0)), -lim, 0, 3, 1.0, "V", 0.1)
+        self.iv_step = sp(float(ivc.get("step_mV", 10)), 1, 5000, 0, 1e-3, "mV", 1)
+        self.iv_step.setToolTip("Plain numbers are mV; the SR570 sets the bias in 1 mV "
+                                "steps, so values are rounded to 1 mV.")
+        self.iv_cycles = QtWidgets.QSpinBox()
+        self.iv_cycles.setRange(1, 1000)
+        self.iv_cycles.setValue(int(ivc.get("cycles", 1)))
+        self.iv_wait = sp(float(ivc.get("wait_ms", 100)), 0, 1e5, 0, 1e-3, "ms", 10)
+        self.iv_wait.setToolTip("Wait after each bias step before reading")
+        self.iv_navg = QtWidgets.QSpinBox()
+        self.iv_navg.setRange(1, 1000)
+        self.iv_navg.setValue(int(ivc.get("n_avg", 5)))
+        f.addRow("Max (V)", self.iv_max)
+        f.addRow("Min (V)", self.iv_min)
+        f.addRow("Step (mV)", self.iv_step)
+        f.addRow("Cycles", self.iv_cycles)
+        f.addRow("Wait per point (ms)", self.iv_wait)
+        f.addRow("Readings per point", self.iv_navg)
+        self.iv_eta = QtWidgets.QLabel("-")
+        f.addRow("Est. time", self.iv_eta)
+        lay.addWidget(g)
+        g = QtWidgets.QGroupBox("SR570 (DC)")
+        f = QtWidgets.QFormLayout(g)
+        self.iv_sens = QtWidgets.QComboBox()
+        for i in range(self.amp_sens.count()):
+            self.iv_sens.addItem(self.amp_sens.itemText(i), self.amp_sens.itemData(i))
+        i = self.iv_sens.findData(float(ivc.get("sensitivity", 1e-6)))
+        self.iv_sens.setCurrentIndex(i if i >= 0 else self.iv_sens.findData(1e-6))
+        self.iv_sens.setToolTip("Set this to the SR570 front-panel sensitivity. The SR570 "
+                                "can't be read, so the current is calculated with this value.")
+        f.addRow("Sensitivity", self.iv_sens)
+        self.iv_inv = QtWidgets.QCheckBox("Invert sign of the current")
+        self.iv_inv.setChecked(bool(ivc.get("invert", False)))
+        self.iv_inv.setToolTip("Check once with a resistor: a positive bias should give a "
+                               "positive current. If not, tick this.")
+        f.addRow(self.iv_inv)
+        aux = QtWidgets.QLabel("Reads the SR570 output on AUX IN 1 of the photocurrent "
+                               "SR830 (rear panel).")
+        aux.setWordWrap(True)
+        aux.setStyleSheet("color:gray")
+        f.addRow(aux)
+        lay.addWidget(g)
+        self.iv_note = QtWidgets.QLabel()
+        self.iv_note.setWordWrap(True)
+        self.iv_note.setStyleSheet("color:#c62828")
+        lay.addWidget(self.iv_note)
+        expl = QtWidgets.QLabel(
+            "Before an I–V you'll be reminded to set the SR570 filter OFF and LOW DRIFT and to "
+            "move its output cable to AUX IN 1; before the next map, to change them back. "
+            "The bias ramps back to 0 V at the end, on Stop and on errors. The sweep stops "
+            "if the SR570 output goes above 10 V.")
+        expl.setWordWrap(True)
+        expl.setStyleSheet("color:gray")
+        lay.addWidget(expl)
+        lay.addStretch(1)
+        for w in (self.iv_max, self.iv_min, self.iv_step, self.iv_wait):
+            w.valueChanged.connect(self.update_iv_eta)
+        for w in (self.iv_cycles, self.iv_navg):
+            w.valueChanged.connect(self.update_iv_eta)
+        ok = not isinstance(self.hw.bias, instruments.NoBias)
+        self.iv_note.setText("" if ok else "Quick I–V needs the SR570 as bias source "
+                             "(Hardware → Settings → Bias).")
+        self.iv_note.setVisible(not ok)
+        self.update_iv_eta()
+
+    def _iv_settings(self):
+        import iv
+        if isinstance(self.hw.bias, instruments.NoBias):
+            raise ValueError("Quick I–V needs the SR570 as bias source "
+                             "(Hardware → Settings → Bias).")
+        return iv.IVSettings(
+            v_max=self.iv_max.value(), v_min=self.iv_min.value(),
+            step=self.iv_step.value() / 1000, cycles=self.iv_cycles.value(),
+            wait_ms=self.iv_wait.value(), n_avg=self.iv_navg.value(),
+            sensitivity=float(self.iv_sens.currentData()), invert=self.iv_inv.isChecked(),
+            aux_in=int((self.config.get("iv", {}) or {}).get("aux_in", 1)),
+            sample=self.sample.text() or "sample", notes=self.exp_notes.toPlainText(),
+            conditions=self.conditions())
+
+    def update_iv_eta(self, *_):
+        import iv
+        try:
+            n = len(iv.bias_points(iv.IVSettings(
+                v_max=self.iv_max.value(), v_min=self.iv_min.value(),
+                step=self.iv_step.value() / 1000, cycles=self.iv_cycles.value())))
+        except Exception:
+            self.iv_eta.setText("-")
+            return
+        per = self.iv_wait.value() / 1000 + self.iv_navg.value() * 0.012 + 0.06
+        self.iv_eta.setText(f"{n} points ≈ {n * per / 60:.1f} min")
+
+    def _switch_reminder(self, kind):
+        """Remind to re-cable / re-set the SR570 when switching between lock-in
+        maps and the DC I-V. Returns False if the user cancels."""
+        last = (self.config.get("ui", {}) or {}).get("last_measurement", "map")
+        if kind == last:
+            return True
+        if kind == "iv":
+            sens = self.iv_sens.currentText()
+            text = ("Switching to a DC I–V. Please check:\n\n"
+                    "•  SR570 filter: OFF\n"
+                    "•  SR570 gain mode: LOW DRIFT\n"
+                    "•  SR570 output cable: moved to AUX IN 1 (rear of the photocurrent SR830)\n"
+                    f"•  SR570 sensitivity on the front panel: {sens}\n\n"
+                    "Ready?")
+        else:
+            text = ("Switching back to lock-in maps. Please check:\n\n"
+                    "•  SR570 output cable: back to the lock-in signal input\n"
+                    "•  SR570 filter and gain mode: back to your lock-in settings\n"
+                    "•  SR570 sensitivity matches 'Photocurrent amplifier' (Instruments tab)\n\n"
+                    "Ready?")
+        ans = QtWidgets.QMessageBox.question(self, "SPCM", text)
+        if ans != QtWidgets.QMessageBox.StandardButton.Yes:
+            return False
+        self.config.setdefault("ui", {})["last_measurement"] = kind
+        self._save_setting("ui", "last_measurement", kind)
+        return True
+
+    def start_iv(self):
+        import iv
+        try:
+            s = self._iv_settings()
+            iv.bias_points(s)
+        except Exception as e:
+            self.error(str(e))
+            return
+        if not self._switch_reminder("iv"):
+            return
+        for k, v in (("v_max", s.v_max), ("v_min", s.v_min), ("step_mV", s.step * 1000),
+                     ("cycles", s.cycles), ("wait_ms", s.wait_ms), ("n_avg", s.n_avg),
+                     ("sensitivity", s.sensitivity), ("invert", s.invert)):
+            self._save_setting("iv", k, v)
+        self.remember_experiment()
+        self.worker = iv.IVWorker(self.hw, s, self.folder.text() or "data",
+                                  name=self.measurement_name("iv", s))
+        self.iv_data = self.worker.data
+        self.tabs.setCurrentWidget(self.iv_plot)
+        self._redraw_iv()
+        self.thread = QtCore.QThread()
+        self.worker.moveToThread(self.thread)
+        self.thread.started.connect(self.worker.run)
+        self.worker.point.connect(self._redraw_iv)
+        self.worker.status.connect(self.statusBar().showMessage)
+        self.worker.progress.connect(self.on_progress)
+        self.worker.finished.connect(self.on_iv_finished)
+        self.worker.failed.connect(self.on_iv_failed)
+        self.worker.notify.connect(self.toast)
+        self.start_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.discard_btn.setEnabled(True)
+        self._discard = False
+        self.thread.start()
+
+    def _redraw_iv(self, *_):
+        d = getattr(self, "iv_data", None)
+        p = self.iv_plot
+        p.clear()
+        if p.plotItem.legend is not None:
+            p.plotItem.legend.clear()
+        if d is None or not d.rows:
+            return
+        a = d.array()
+        cycles = sorted(set(a[:, 2].astype(int)))
+        cm = pg.colormap.get("viridis")
+        cols = cm.map(np.linspace(0, 0.85, max(len(cycles), 1)), mode="qcolor")
+        for c, col in zip(cycles, cols):
+            sel = a[:, 2] == c
+            p.plot(a[sel, 0], a[sel, 1], pen=pg.mkPen(col, width=1.5), symbol="o",
+                   symbolSize=4, symbolPen=None, symbolBrush=col,
+                   name=f"cycle {c}" if len(cycles) > 1 else None)
+        last = a[-1]
+        p.setTitle(f"{last[0]:+.3f} V   {si(last[1], 'A')}")
+
+    def on_iv_finished(self, path):
+        done = self.iv_data.completed
+        self._cleanup()
+        if getattr(self, "_discard", False):
+            self._delete_scan_files(path)
+            self.statusBar().showMessage("I–V stopped and discarded (nothing saved)")
+            return
+        try:
+            from scanner import update_experiment
+            update_experiment(path, self.conditions(), self.exp_notes.toPlainText())
+        except Exception:
+            pass
+        try:
+            import iv
+            self.iv_data = iv.load_iv(path)
+            iv.export_csv(self.iv_data)
+            iv.save_all(self.iv_data)
+            self._redraw_iv()
+        except Exception as e:
+            self.statusBar().showMessage(f"CSV/figure export failed: {e}")
+            return
+        self.statusBar().showMessage(("I–V finished" if done else "I–V stopped")
+                                     + f" - saved {os.path.abspath(path)} + PNG and CSV")
+
+    def on_iv_failed(self, tb):
+        self._cleanup()
+        if getattr(self, "_discard", False):
+            self._delete_scan_files(self.iv_data.path)
+            return
+        self._redraw_iv()
+        self.error("I–V aborted (bias ramped to 0 V, what was measured is saved):\n\n" + tb)
+
+    # ---------------------------------------------------------------- resolution
+    def toggle_resolution(self, on):
+        if on and self.data is None:
+            self.res_btn.setChecked(False)
+            self.error("Open or measure a map first.")
+            return
+        if on and not self.res_rois:
+            u, v, _, _ = self._view_axes(self.data)
+            a = (u[0] + (u[-1] - u[0]) * 0.3, v[0] + (v[-1] - v[0]) * 0.5)
+            b = (u[0] + (u[-1] - u[0]) * 0.7, v[0] + (v[-1] - v[0]) * 0.5)
+            step = abs(u[1] - u[0]) if len(u) > 1 else 0.5
+            roi = pg.LineROI(a, b, width=step * 2, pen=pg.mkPen("#ff9800", width=2),
+                             hoverPen=pg.mkPen("#ffeb3b", width=2))
+            self.r_panel.plot.addItem(roi)
+            roi.sigRegionChangeFinished.connect(lambda *_: self.update_resolution())
+            self.res_rois = [roi]
+        for r in self.res_rois:
+            r.setVisible(on)
+        if on:
+            if self.res_dialog is None:
+                self.res_dialog = ResolutionDialog(self)
+            self.res_dialog.show()
+            self.res_dialog.raise_()
+            self.update_resolution()
+        elif self.res_dialog is not None:
+            self.res_dialog.hide()
+
+    def _res_line(self):
+        r = self.res_rois[0]
+        w = r.size()[1]
+        p0 = r.mapToParent(QtCore.QPointF(0, w / 2))
+        p1 = r.mapToParent(QtCore.QPointF(r.size()[0], w / 2))
+        return (p0.x(), p0.y()), (p1.x(), p1.y()), abs(w)
+
+    def update_resolution(self):
+        if not self.res_rois or self.res_dialog is None or self.data is None:
+            return
+        import resolution
+        d = self.data
+        u, v, oix, oiy = self._view_axes(d)
+        ib = max(self.map_sel.currentIndex(), 0)
+        ch = min(self.ch_r.currentIndex(), 2)
+        img = d.refl[ib, :, :, ch][np.ix_(oiy, oix)]
+        p0, p1, width = self._res_line()
+        try:
+            m = resolution.measure(img, u, v, p0, p1, width)
+        except Exception as e:
+            self.res_dialog.show_error(str(e))
+            return
+        m["map_step_um"] = float(min(abs(u[1] - u[0]), abs(v[1] - v[0]))) \
+            if len(u) > 1 and len(v) > 1 else float("nan")
+        m["width_um"] = width
+        m["channel"] = CHANNELS[ch]
+        m["map"] = getattr(d, "path", "") or "(not saved)"
+        self.res_dialog.show_result(m)
+
     # ----------------------------------------------------------------
     def start(self):
         if getattr(self, "af_thread", None) is not None:
             self.error("Wait for the autofocus to finish.")
             return
+        if self.side_tabs.currentIndex() == 1:
+            self.start_iv()
+            return
         try:
             s = self.settings()
         except Exception as e:
             self.error(str(e))
+            return
+        if not self._switch_reminder("map"):
             return
         # sanity check: is the scan where the stage is now?
         try:
@@ -1667,6 +1971,12 @@ class MainWindow(QtWidgets.QMainWindow):
              "date": time.strftime("%Y%m%d"), "time": time.strftime("%H%M"),
              "type": {"map": "map", "line": "line"}.get(kind, kind.replace("_", "") + "sweep")}
         v.update({k: val for k, val in self.experiment_fields()})
+        if kind == "iv":
+            v["type"] = "IV"
+            if s is not None:
+                v["bias"] = naming.range_text([s.v_min, s.v_max], "V")
+            v["power"] = self._power_now_text()
+            return v
         try:
             s = s or (self.settings() if kind in ("map", "line") else None)
         except Exception:
@@ -1730,9 +2040,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _setup_views(self):
         d = self.data
-        for r in self.rois:
+        for r in self.rois + self.res_rois:
             r.scene() and r.scene().removeItem(r)
-        self.rois = []
+        self.rois, self.res_rois = [], []
+        if self.res_btn.isChecked():
+            self.res_btn.setChecked(False)
         if self.frame_btn.isChecked():
             self.frame_btn.setChecked(False)
         u, v, _, _ = self._view_axes(d)
@@ -1899,6 +2211,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self, "Open scan", self.folder.text(), "HDF5 (*.h5)")
         if path:
             try:
+                import iv
+                if iv.is_iv_file(path):
+                    self.iv_data = iv.load_iv(path)
+                    self._redraw_iv()
+                    self.tabs.setCurrentWidget(self.iv_plot)
+                    self.statusBar().showMessage(f"Loaded {path}")
+                    return
                 self.data = load(path)
                 self._setup_views()
                 self.statusBar().showMessage(f"Loaded {path}")
@@ -1930,3 +2249,127 @@ class MainWindow(QtWidgets.QMainWindow):
             self.hw.close()
             self._hw_closed = True
         ev.accept()
+
+
+class ResolutionDialog(QtWidgets.QDialog):
+    """Profile + edge fit and derivative + Gaussian for 'Measure resolution'."""
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.win = win
+        self.setWindowTitle("SPCM – resolution from a reflection edge")
+        self.resize(560, 640)
+        lay = QtWidgets.QVBoxLayout(self)
+        self.result = QtWidgets.QLabel("Move the orange line across a sharp edge.")
+        self.result.setWordWrap(True)
+        self.result.setStyleSheet("font-size:12pt")
+        lay.addWidget(self.result)
+        glw = pg.GraphicsLayoutWidget()
+        lay.addWidget(glw, 1)
+        self.p1 = glw.addPlot(row=0, col=0)
+        self.p2 = glw.addPlot(row=1, col=0)
+        self.p2.setXLink(self.p1)
+        self.p1.setLabel("left", "Reflection", units="V")
+        self.p2.setLabel("left", "dR/dx", units="V/µm")
+        self.p2.setLabel("bottom", "Distance along the line (µm)")
+        for p in (self.p1, self.p2):
+            p.getAxis("bottom").enableAutoSIPrefix(False)
+            p.showGrid(x=True, y=True, alpha=0.25)
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(QtWidgets.QLabel("Objective NA"))
+        self.na = SISpinBox(1.0)
+        self.na.setRange(0.05, 1.6)
+        self.na.setDecimals(2)
+        self.na.setSingleStep(0.05)
+        self.na.setValue(float((win.config.get("ui", {}) or {}).get("objective_na", 0.9)))
+        self.na.valueChanged.connect(self._na_changed)
+        row.addWidget(self.na)
+        row.addStretch(1)
+        self.save_btn = QtWidgets.QPushButton("Save (PNG, CSV, TXT) next to the map")
+        self.save_btn.clicked.connect(self.save)
+        row.addWidget(self.save_btn)
+        lay.addLayout(row)
+        self.m = None
+        from pyqtgraph.Qt import QtGui
+        dark = bool((win.config.get("ui", {}) or {}).get("dark", False))
+        style_plots(glw, dark)
+
+    def _na_changed(self, v):
+        self.win._save_setting("ui", "objective_na", float(v))
+        if self.m is not None:
+            self.show_result(self.m)
+
+    def _wavelength_nm(self):
+        pm = getattr(self.win, "pm", None)
+        if pm is not None and getattr(pm, "wavelength_nm", None):
+            return float(pm.wavelength_nm)
+        return float((self.win.config.get("powermeter", {}) or {}).get("wavelength_nm", 532))
+
+    def show_error(self, text):
+        self.m = None
+        self.result.setText(f"<span style='color:#c62828'>{text}</span>")
+        self.p1.clear()
+        self.p2.clear()
+
+    def show_result(self, m):
+        import resolution
+        self.m = m
+        fit, x, y = m["fit"], m["distance"], m["values"]
+        lam = self._wavelength_nm()
+        dl = 0.51 * lam / self.na.value()
+        lines = [f"<b>FWHM = {fit['fwhm'] * 1000:.0f} nm</b>   (10–90 %: "
+                 f"{fit['w1090'] * 1000:.0f} nm)",
+                 f"Diffraction limit 0.51 λ/NA = {dl:.0f} nm  (λ = {lam:g} nm, NA = "
+                 f"{self.na.value():.2f})"]
+        if m.get("realigned"):
+            lines.append(f"The line crossed the edge {m['angle_deg']:.0f}° off perpendicular; "
+                         "measured along the edge's normal instead.")
+        step = m.get("map_step_um", float("nan"))
+        if np.isfinite(step) and step > fit["fwhm"] / 3:
+            lines.append(f"<span style='color:#c62828'>The map step ({step * 1000:.0f} nm) is "
+                         "coarse for this spot size: the true FWHM may be smaller. Scan the "
+                         f"edge with a step of ≤ {fit['fwhm'] * 250:.0f} nm.</span>")
+        L = float(np.nanmax(x) - np.nanmin(x))
+        if fit["w1090"] > 0.4 * L:
+            lines.append("<span style='color:#c62828'>The line is short compared with the "
+                         "edge: make it longer so it reaches the flat parts on both "
+                         "sides.</span>")
+        if fit.get("contrast_to_noise", 99) < 10:
+            lines.append("<span style='color:#c62828'>Weak edge or noisy profile: the fit "
+                         "is uncertain.</span>")
+        self.result.setText("<br>".join(lines))
+        self.p1.clear()
+        self.p2.clear()
+        xx = np.linspace(np.nanmin(x), np.nanmax(x), 300)
+        self.p1.plot(x, y, pen=None, symbol="o", symbolSize=4, symbolBrush="#888",
+                     symbolPen=None)
+        self.p1.plot(xx, resolution.model(xx, fit), pen=pg.mkPen("#e53935", width=2))
+        self.p2.plot(x, resolution.derivative(x, y), pen=None, symbol="o", symbolSize=4,
+                     symbolBrush="#888", symbolPen=None)
+        self.p2.plot(xx, resolution.gaussian(xx, fit), pen=pg.mkPen("#1e88e5", width=2))
+
+    def save(self):
+        import resolution
+        m = self.m
+        d = self.win.data
+        path = getattr(d, "path", None) if d is not None else None
+        if m is None or not path:
+            self.win.error("Nothing to save, or the map is not saved yet.")
+            return
+        folder = os.path.dirname(os.path.abspath(path))
+        base = resolution.next_base(folder, os.path.splitext(os.path.basename(path))[0])
+        lam = self._wavelength_nm()
+        info = {"Map file": os.path.basename(path), "Reflection channel": m["channel"],
+                "Line from (µm)": f"({m['p0'][0]:.3f}, {m['p0'][1]:.3f})",
+                "Line to (µm)": f"({m['p1'][0]:.3f}, {m['p1'][1]:.3f})",
+                "Band width averaged (µm)": f"{m['width_um']:.3f}",
+                "Re-measured perpendicular to the edge": m.get("realigned", False),
+                "Map step (nm)": f"{m.get('map_step_um', float('nan')) * 1000:.0f}",
+                "Wavelength (nm)": f"{lam:g}", "Objective NA": f"{self.na.value():.2f}",
+                "Diffraction limit 0.51 λ/NA (nm)": f"{0.51 * lam / self.na.value():.0f}"}
+        try:
+            files = resolution.save(base, m["distance"], m["values"], m["fit"], info)
+            self.win.statusBar().showMessage("Resolution saved: " + ", ".join(
+                os.path.basename(f) for f in files))
+        except Exception as e:
+            self.win.error(f"Could not save:\n{e}")

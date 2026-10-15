@@ -30,6 +30,8 @@ the real hardware and report back with screenshots. Write in plain language for 
 | `settings_dialog.py` | hardware settings window; writes `config.yaml` |
 | `numparse.py` | SI-prefix number parsing and the `SISpinBox` class |
 | `naming.py` | measurement names from a pattern, one folder per measurement |
+| `iv.py` | quick DC I–V: `IVSettings`, `bias_points()` (cycles 0→max→min→0), `IVData` (h5/CSV/PNG), `IVWorker` |
+| `resolution.py` | spot size from an edge on the reflection map: profile, erf fit (no scipy), slant correction, save |
 | `figures.py` | publication-style PNG (matplotlib Agg) |
 | `autofocus.py` | z sweep that maximizes the camera sharpness |
 | `config.default.yaml` | default settings. `config.yaml` is the user's copy, created on the first start. It is git-ignored and never overwritten. |
@@ -62,6 +64,10 @@ the real hardware and report back with screenshots. Write in plain language for 
   - Every Tango command and reply is logged to `spcm_stage.log`.
   - A move counts as done only when the stage is not moving **and** reports the target position.
 - **Laser power:** "Scan at this power" sets the SINE OUT once before each scan. `set_laser_power` moves the SINE OUT in **2 mV steps in one direction only** (never up and down, the user's request to protect the laser) until the sample power is within tolerance; it can be aborted (button, or Stop before a scan). There is **no drift correction** during the scan (a bright gold area was mistaken for drift). Power is still logged per line.
+
+**Quick I–V and resolution**
+- Quick I–V reads the SR570 output on **AUX IN 1** of the photocurrent SR830 (`OAUX? 1`); current = AUX voltage × SR570 sensitivity, which the user selects (the SR570 can't be read). SR570 filter OFF / LOW DRIFT and the cable move are done **by hand**; the program only reminds (`_switch_reminder`, on every switch map ↔ I–V, remembered in `ui.last_measurement`). Sweep = cycles of 0 → max → min → 0 (no other shapes: the user's separate Keithley program covers more). Inputs follow the usual convention: max/min in V, step in mV; values rounded to the SR570's 1 mV.
+- Resolution: analysis of existing maps only (no fine line scan). Fit R = A + B·erf((x−x0)/(√2σ)); FWHM = 2.355σ, 10–90 % = 2.563σ.
 
 **Data**
 - **One folder per measurement**: `<save dir>/<name>/<name>.h5` + PNG(s) + `<name>_csv/`. Names come from a pattern (`naming.py`), default `{sample}_{date}_{size}_{step}_{power}_{n}`; experiment-note quantities can be fields.
@@ -105,6 +111,7 @@ It needs the libraries from `requirements.txt`; without PyQt5 it skips the windo
 ## Status and branches
 
 - `main`: **1.0** (0.9.0 + the fixes from the first lab test). Released; this is what the lab uses.
+- `next`: 1.1 in testing (quick I–V, resolution). Becomes one commit "SPCM 1.1.0" on `main` once the user has tested it.
 - `experimental-0.10`: point sweeps, line scans, camera calibration (0.10.0 pre-release). Tested in simulation only; the user considers it highly experimental. Don't merge it into `main` without asking. If features from it are wanted, bring them over one at a time onto `main`, keeping the 1.0 decisions above (e.g. the 2 mV one-direction power setting).
 - Each released version is one commit on `main` ("SPCM x.y.z"), with a tag `vx.y.z`.
 

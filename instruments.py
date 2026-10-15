@@ -220,6 +220,11 @@ class SR830:
     def set_aux_out(self, channel, volts):
         self.inst.write(f"AUXV {int(channel)},{volts:.4f}")
 
+    def aux_in(self, channel=1):
+        """Voltage on the rear-panel AUX IN 1-4 (±10.5 V), e.g. the SR570
+        output for a DC I-V."""
+        return float(self.inst.query(f"OAUX? {int(channel)}"))
+
     # reference SINE OUT amplitude (Vrms, 0.004-5.000 V in 2 mV steps).
     # Only used by the power lock during a scan.
     def sine_amplitude(self):
@@ -371,6 +376,12 @@ class SimWorld:
         drift = 1 - 0.15 * (1 - np.exp(-t / 90)) + 0.02 * np.sin(t / 7)
         return 100e-6 * self.laser_amp * drift
 
+    def dc_current(self):
+        """DC current through the simulated device at the present bias (A):
+        a slightly non-linear resistor plus the photocurrent of the laser."""
+        v = self.bias
+        return 2e-7 * v + 5e-8 * np.sinh(2.5 * v) + 2e-9 * self.power_factor()
+
     def power_factor(self):
         return self.laser_power() / 100e-6
 
@@ -503,6 +514,11 @@ class SimSR830:
     def set_aux_out(self, channel, volts):
         if self.role == "photocurrent":
             self.w.bias = volts
+
+    def aux_in(self, channel=1):
+        """Simulated SR570 output (DC, 1 µA/V) for the quick I-V."""
+        time.sleep(0.003)
+        return self.w.dc_current() / 1e-6 + 2e-4 * self.w.rng.normal()
 
     def input_unit(self):
         return "V"

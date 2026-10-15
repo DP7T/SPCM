@@ -104,8 +104,45 @@ The left side has two tabs:
   - Drag the round handle to rotate it.
 
   Then press **Scan this frame**: the start position, size, direction and angle are filled in for you. Check the step and press Start scan. It also works on a scan you opened from a file, as long as the origin is the same spot.
-- Double-click a map to park the laser on that spot, for example for I–V or power dependence measured by hand.
+- Double-click a map to park the laser on that spot, for example before a quick I–V.
 - If the photocurrent lock-in overloads, a warning appears in the status bar.
+
+## Quick I–V (DC, without moving the probes)
+
+The **Quick I–V** tab measures the DC current against the bias from the SR570, with the laser spot wherever it is.
+
+**Set-up:** the SR570 output goes to **AUX IN 1** on the rear of the photocurrent SR830 instead of the lock-in input, and the SR570 runs with **filter OFF** and **LOW DRIFT**. The program reminds you each time you switch between maps and I–V, both ways. It can't check these settings, because the SR570 can't be read.
+
+**Settings:**
+- **Max (V)**, **Min (V)**, **Step (mV)**: one cycle is 0 → max → min → 0. **Cycles** repeats it.
+  - A plain number is in the field's unit: max/min in V, step in mV. `10` as the step means 10 mV, and so does `10m`.
+  - The SR570 sets the bias in 1 mV steps, so values are rounded to 1 mV.
+- **Wait per point (ms)** and **Readings per point**: after each bias step the program waits, then averages that many AUX IN readings.
+- **Sensitivity**: the SR570 front-panel sensitivity. The current is AUX IN voltage × sensitivity, so this must match the front panel.
+- **Invert sign**: check this once with a resistor. A positive bias should give a positive current; if it doesn't, tick the box.
+
+Press **Start I–V**, the Start button on this tab. The **I–V** tab on the right shows the curve live, one colour per cycle.
+
+**Safety:**
+- The bias ramps back to 0 V at the end, on Stop and on errors.
+- If the SR570 output goes above 10 V, the sweep stops. The AUX IN only reads up to ±10.5 V. Use a less sensitive SR570 setting or a smaller bias range.
+- The laser stays as it is, so the current includes the DC photocurrent. Block the beam for a dark I–V.
+
+**Files:** like every measurement, the I–V gets its own folder, with `IV` in the name:
+- `<name>.h5` holds the dataset `iv`, one row per point: bias (V), current (A), cycle, time (s), AUX IN (V).
+- `<name>_csv/iv.csv` has the same columns, numbers only.
+- `<name>.png` is the plot.
+
+## Measuring the resolution
+
+1. Measure or open a reflection map that crosses a sharp edge, such as a gold electrode. Use a step well below the spot size, ideally ≤ 100 nm.
+2. Press **Measure resolution** above the maps. An orange line appears on the reflection map. Drag it across the edge. The side handle widens the band that is averaged, which helps with noisy maps.
+3. A window shows the reflection profile with an edge fit, and its derivative with the matching Gaussian, which is the spot's line profile:
+   - **FWHM** of the spot and the **10–90 % edge width**;
+   - the **diffraction limit** 0.51 λ/NA for comparison. Type the objective's **NA**; λ is taken from the power meter wavelength.
+   - If the line crosses the edge at a slant, the program measures along the edge's normal instead, so the width isn't over-estimated.
+   - It warns you if the map step is too coarse for the spot, or if the edge is too weak or noisy for a reliable fit.
+4. The window updates as you move the line. **Save** writes `<map name>_resolution_1.png`, `.csv` (distance, reflection, fit; numbers only) and `.txt` (the results) into the map's folder.
 
 ## Power meter (PM100USB) and camera (CS165CU)
 

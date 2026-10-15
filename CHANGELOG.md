@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.0 (in testing)
+- **Quick I–V**: DC current vs SR570 bias through AUX IN 1 of the photocurrent SR830;
+  cycles 0 → max → min → 0; SR570 sensitivity entered by hand; reminders to re-cable and
+  re-set the SR570 when switching between maps and I–V; stops above 10 V SR570 output
+- **Measure resolution**: line across an edge on the reflection map → edge fit, FWHM,
+  10–90 % width, derivative + Gaussian, diffraction limit; re-measures perpendicular to
+  the edge; saves PNG/CSV/TXT next to the map
+
 ## 1.0.0 (2026-10-15)
 First full release: 0.9.1, tested on the microscope. No changes to the program since 0.9.1;
 adds the licence (MIT) and the documentation (HOW_IT_WAS_BUILT.md, AGENTS.md).

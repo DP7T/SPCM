@@ -2,7 +2,8 @@
 
     python tools/selftest.py [output folder]
 
-Runs small map scans (step and fly) on the simulated microscope, saves and reloads every file, writes CSVs and
+Runs small map scans (step and fly), a quick I-V and the resolution fit on the
+simulated microscope, saves and reloads every file, writes CSVs and
 figures, and - if PyQt5 is installed - opens the main window off-screen and
 saves screenshots of its tabs. Exits with an error if anything fails.
 Used by the GitHub test workflow; also handy after changing the code.
@@ -140,6 +141,41 @@ def _():
     assert np.isfinite(d.pc[..., 0]).mean() > 0.9
 
 
+@check("quick I-V (cycles, AUX IN), save/load/CSV/figure")
+def _():
+    import iv
+    s = iv.IVSettings(v_max=0.5, v_min=-0.5, step=0.05, cycles=2, wait_ms=0, n_avg=2,
+                      sensitivity=1e-6, sample="selftest_iv")
+    pts = iv.bias_points(s)
+    assert pts[0][0] == 0 and max(p for p, _ in pts) == 0.5 and min(p for p, _ in pts) == -0.5
+    assert len(pts) == 1 + 2 * 40, len(pts)
+    p = run_worker(iv.IVWorker(HW, s, OUT, name="selftest_iv_001"))
+    d = iv.load_iv(p)
+    a = d.array()
+    assert d.completed and a.shape == (len(pts), 5)
+    k = np.argmin(abs(a[:, 0] - 0.5))
+    assert 1e-7 < a[k, 1] < 1e-6, a[k]              # simulated device: ~0.27 µA at 0.5 V
+    assert HW.bias.value == 0.0, "bias not back at 0"
+    iv.export_csv(d)
+    iv.save_all(d)
+
+
+@check("resolution from an edge (fit, slanted line)")
+def _():
+    import math
+    import resolution
+    xs, ys = np.arange(0, 10, 0.05), np.arange(0, 8, 0.05)
+    X, Y = np.meshgrid(xs, ys)
+    img = 0.05 + 0.02 * resolution._erf((X - 5) / (math.sqrt(2) * 0.2))
+    img = img + 2e-4 * np.random.default_rng(0).normal(size=img.shape)
+    for p1 in ((7, 4), (7, 5.5)):
+        m = resolution.measure(img, xs, ys, (3, 4), p1, width=0.5)
+        fw = m["fit"]["fwhm"]
+        assert abs(fw - 0.2 * 2.3548) < 0.04, (p1, fw)
+    resolution.save(os.path.join(OUT, "selftest_resolution"), m["distance"], m["values"],
+                    m["fit"], {"test": "synthetic edge, sigma 200 nm"})
+
+
 try:
     from pyqtgraph.Qt import QtWidgets, QtCore  # noqa: F401
     HAVE_QT = True
@@ -158,6 +194,8 @@ if HAVE_QT:
         gui.apply_theme(app, False)
         cfg = dict(CFG)
         cfg["save_dir"] = OUT
+        QtWidgets.QMessageBox.question = staticmethod(
+            lambda *a, **k: QtWidgets.QMessageBox.StandardButton.Yes)   # reminders: OK
         w = gui.MainWindow(HW, cfg, None)
         w.resize(1600, 950)
         w.show()
@@ -204,6 +242,42 @@ if HAVE_QT:
         shot("save_box")
         assert w.name_preview.text().startswith("next map:"), w.name_preview.text()
         print("      " + w.name_preview.text())
+        # fine map across an electrode edge, then "Measure resolution"
+        w.set_origin(0.0, 0.0)
+        w.xc.setValue(3)
+        w.yc.setValue(-1)
+        w.xs_.setValue(4)
+        w.ys_.setValue(2)
+        w.step.setValue(200)
+        w.start()
+        t0 = time.time()
+        while w.thread is not None and time.time() - t0 < 300:
+            pump(0.2)
+        assert w.thread is None, "edge map did not finish"
+        w.res_btn.setChecked(True)
+        pump(0.5)
+        m = w.res_dialog.m
+        assert m is not None, "no resolution result"
+        print(f"      resolution on the simulated edge: FWHM {m['fit']['fwhm'] * 1000:.0f} nm")
+        shot("resolution_line")
+        w.res_dialog.grab().save(os.path.join(OUT, "screen_resolution_dialog.png"))
+        w.res_dialog.save()
+        w.res_btn.setChecked(False)
+        # quick I-V through the GUI
+        w.side_tabs.setCurrentIndex(1)
+        w.iv_max.setValue(0.5)
+        w.iv_min.setValue(-0.5)
+        w.iv_step.setValue(50)
+        w.iv_cycles.setValue(2)
+        w.iv_wait.setValue(0)
+        shot("iv_tab")
+        w.start()
+        t0 = time.time()
+        while w.thread is not None and time.time() - t0 < 300:
+            pump(0.2)
+        assert w.thread is None, "I-V did not finish"
+        assert w.iv_data is not None and len(w.iv_data.rows) == 81
+        shot("iv")
         w._hw_closed = True          # keep the simulated hardware for later tests
         w.close()
 
