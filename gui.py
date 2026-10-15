@@ -847,7 +847,7 @@ class MainWindow(QtWidgets.QMainWindow):
         bar.insertWidget(0, self.draw_btn)
         self.use_frame_btn.setVisible(False)
         self.use_line_btn.setVisible(False)
-        bar.addStretch(1)
+        bar.addSpacing(8)
         bar.addWidget(self._help_btn(
             "Maps",
             "• Double-click a map to move the laser there (when idle).\n"
@@ -858,9 +858,10 @@ class MainWindow(QtWidgets.QMainWindow):
             "timing and series come from the Map tab.\n"
             "• Draw ▸ Resolution line: put it across a sharp edge on the reflection map; the "
             "spot size (FWHM) is fitted."))
-        right.addWidget(self.map_tools)
 
         self.tabs = QtWidgets.QTabWidget()
+        # the drawing tools sit next to the tab names, so nothing jumps when they hide
+        self.tabs.setCornerWidget(self.map_tools, QtCore.Qt.TopRightCorner)
         right.addWidget(self.tabs, 1)
         maps_w = QtWidgets.QWidget()
         maps = QtWidgets.QHBoxLayout(maps_w)
