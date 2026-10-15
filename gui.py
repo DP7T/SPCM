@@ -84,7 +84,7 @@ class MapPanel(QtWidgets.QWidget):
         grp = QtWidgets.QButtonGroup(self)
         for key, label, tip in (("auto", "Auto", "Fit the colour scale to the data"),
                                 ("sym", "Symmetric ±", "Centre the scale on zero: −max … +max"),
-                                ("manual", "Manual", "Use the min/max typed on the right")):
+                                ("manual", "Manual", "Use the Min/Max typed below")):
             b = QtWidgets.QRadioButton(label)
             b.setToolTip(tip)
             grp.addButton(b)
@@ -92,7 +92,10 @@ class MapPanel(QtWidgets.QWidget):
             row.addWidget(b)
             self.mode_btns[key] = b
         self.mode_btns["auto"].setChecked(True)
-        row.addSpacing(10)
+        row.addStretch(1)
+        lay.addLayout(row)
+        row = QtWidgets.QHBoxLayout()          # second line: limits + line cut
+        row.setContentsMargins(6, 0, 6, 4)
         self.min_e, self.max_e = QtWidgets.QLineEdit(), QtWidgets.QLineEdit()
         for lab, e in (("Min", self.min_e), ("Max", self.max_e)):
             e.setFixedWidth(95)
@@ -808,6 +811,7 @@ class MainWindow(QtWidgets.QMainWindow):
         hint = QtWidgets.QLabel("Double-click a map to move the laser there (when idle). "
                                 "Drag the dashed line for a line cut. "
                                 "Drag the colour bar to set the scale.")
+        hint.setWordWrap(True)
         hint.setStyleSheet("color:gray")
         right.addWidget(hint)
 
@@ -1159,9 +1163,11 @@ class MainWindow(QtWidgets.QMainWindow):
         exp = self.config.get("experiment", {}) or {}
         w = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(w)
-        lay.addWidget(QtWidgets.QLabel(
+        lab = QtWidgets.QLabel(
             "Saved with every scan. Write units with the value (e.g. 4.2 K, 1e-6 mbar, "
-            "45°). Values are remembered for the next scan; edit what changed."))
+            "45°). Values are remembered for the next scan; edit what changed.")
+        lab.setWordWrap(True)
+        lay.addWidget(lab)
         self.exp_table = QtWidgets.QTableWidget(0, 2)
         self.exp_table.setHorizontalHeaderLabels(["Quantity", "Value"])
         self.exp_table.horizontalHeader().setStretchLastSection(True)
