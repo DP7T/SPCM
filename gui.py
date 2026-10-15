@@ -784,13 +784,15 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.cam is not None:
             self.tabs.addTab(self.build_camera_tab(), "Camera")
         self.tabs.addTab(self.build_experiment_tab(), "Experiment notes")
-        self.iv_plot = pg.PlotWidget()
+        # a GraphicsLayoutWidget (like the maps) so it follows the light/dark theme
+        self.iv_glw = pg.GraphicsLayoutWidget()
+        self.iv_plot = self.iv_glw.addPlot()
         self.iv_plot.setLabel("bottom", "Bias", units="V")
         self.iv_plot.setLabel("left", "Current", units="A")
         self.iv_plot.showGrid(x=True, y=True, alpha=0.25)
-        self.iv_plot.addLegend(offset=(10, 10))
+        self.iv_legend = self.iv_plot.addLegend(offset=(10, 10))
         self.iv_data = None
-        self.tabs.addTab(self.iv_plot, "I–V")
+        self.tabs.addTab(self.iv_glw, "I–V")
         self.side_tabs.currentChanged.connect(
             lambda i: self.start_btn.setText("Start I–V" if i == 1 else "Start scan"))
         for p in (self.pc_panel, self.r_panel):
@@ -1606,11 +1608,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.iv_sens.setToolTip("Set this to the SR570 front-panel sensitivity. The SR570 "
                                 "can't be read, so the current is calculated with this value.")
         f.addRow("Sensitivity", self.iv_sens)
-        self.iv_inv = QtWidgets.QCheckBox("Invert sign of the current")
-        self.iv_inv.setChecked(bool(ivc.get("invert", False)))
-        self.iv_inv.setToolTip("Check once with a resistor: a positive bias should give a "
-                               "positive current. If not, tick this.")
-        f.addRow(self.iv_inv)
         aux = QtWidgets.QLabel("Reads the SR570 output on AUX IN 1 of the photocurrent "
                                "SR830 (rear panel).")
         aux.setWordWrap(True)
@@ -1649,7 +1646,7 @@ class MainWindow(QtWidgets.QMainWindow):
             v_max=self.iv_max.value(), v_min=self.iv_min.value(),
             step=self.iv_step.value() / 1000, cycles=self.iv_cycles.value(),
             wait_ms=self.iv_wait.value(), n_avg=self.iv_navg.value(),
-            sensitivity=float(self.iv_sens.currentData()), invert=self.iv_inv.isChecked(),
+            sensitivity=float(self.iv_sens.currentData()),
             aux_in=int((self.config.get("iv", {}) or {}).get("aux_in", 1)),
             sample=self.sample.text() or "sample", notes=self.exp_notes.toPlainText(),
             conditions=self.conditions())
@@ -1705,13 +1702,13 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         for k, v in (("v_max", s.v_max), ("v_min", s.v_min), ("step_mV", s.step * 1000),
                      ("cycles", s.cycles), ("wait_ms", s.wait_ms), ("n_avg", s.n_avg),
-                     ("sensitivity", s.sensitivity), ("invert", s.invert)):
+                     ("sensitivity", s.sensitivity)):
             self._save_setting("iv", k, v)
         self.remember_experiment()
         self.worker = iv.IVWorker(self.hw, s, self.folder.text() or "data",
                                   name=self.measurement_name("iv", s))
         self.iv_data = self.worker.data
-        self.tabs.setCurrentWidget(self.iv_plot)
+        self.tabs.setCurrentWidget(self.iv_glw)
         self._redraw_iv()
         self.thread = QtCore.QThread()
         self.worker.moveToThread(self.thread)
@@ -1732,8 +1729,7 @@ class MainWindow(QtWidgets.QMainWindow):
         d = getattr(self, "iv_data", None)
         p = self.iv_plot
         p.clear()
-        if p.plotItem.legend is not None:
-            p.plotItem.legend.clear()
+        self.iv_legend.clear()
         if d is None or not d.rows:
             return
         a = d.array()
@@ -2215,7 +2211,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 if iv.is_iv_file(path):
                     self.iv_data = iv.load_iv(path)
                     self._redraw_iv()
-                    self.tabs.setCurrentWidget(self.iv_plot)
+                    self.tabs.setCurrentWidget(self.iv_glw)
                     self.statusBar().showMessage(f"Loaded {path}")
                     return
                 self.data = load(path)

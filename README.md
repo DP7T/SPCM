@@ -119,7 +119,7 @@ The **Quick I–V** tab measures the DC current against the bias from the SR570,
   - The SR570 sets the bias in 1 mV steps, so values are rounded to 1 mV.
 - **Wait per point (ms)** and **Readings per point**: after each bias step the program waits, then averages that many AUX IN readings.
 - **Sensitivity**: the SR570 front-panel sensitivity. The current is AUX IN voltage × sensitivity, so this must match the front panel.
-- **Invert sign**: check this once with a resistor. A positive bias should give a positive current; if it doesn't, tick the box.
+- **Sign:** if a positive bias gives a negative current, use the SR570's own **INVERT** button.
 
 Press **Start I–V**, the Start button on this tab. The **I–V** tab on the right shows the curve live, one colour per cycle.
 

@@ -278,6 +278,10 @@ if HAVE_QT:
         assert w.thread is None, "I-V did not finish"
         assert w.iv_data is not None and len(w.iv_data.rows) == 81
         shot("iv")
+        w._toggle_dark(True)                      # the I-V plot follows the theme
+        shot("iv_dark")
+        w._toggle_dark(False)
+        shot("iv_light")
         w._hw_closed = True          # keep the simulated hardware for later tests
         w.close()
 

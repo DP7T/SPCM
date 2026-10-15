@@ -33,7 +33,7 @@ class IVSettings:
     wait_ms: float = 100.0      # after each bias step, before reading
     n_avg: int = 5              # AUX IN readings averaged per point
     sensitivity: float = 1e-6   # SR570 A/V (front panel; can't be read)
-    invert: bool = False        # SR570 output sign
+    invert: bool = False        # not used (the SR570 has its own INVERT button)
     aux_in: int = 1
     sample: str = "sample"
     notes: str = ""
