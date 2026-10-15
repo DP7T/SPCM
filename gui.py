@@ -2260,7 +2260,8 @@ class MainWindow(QtWidgets.QMainWindow):
         try:
             X, Y = self.hw.stage.position()
             u, v = self.stage_to_user(X, Y)
-            self.sw_pos.setText(f"({u:.2f}, {v:.2f}) µm from the origin")
+            self.sw_pos.setText(f"({u:.2f}, {v:.2f}) µm")
+            self.sw_pos.setToolTip("Position of the laser, measured from the origin (0, 0).")
         except Exception as e:
             self.sw_pos.setText("?")
             self.statusBar().showMessage(f"Could not read the stage: {e}")
