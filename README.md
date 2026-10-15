@@ -196,3 +196,15 @@ SPCM still opens files saved by earlier versions.
 - **Tango commands** (`instruments.py`, `TangoStage`): the program uses `!moa`, `?pos`, `?statusaxis`, `!dim 1 1` (µm), `!joy`, `!a` and `!autostatus 0`, at 57600 baud. Compare these with the instruction set for your firmware. If your controller runs in LEP/ASI compatibility mode, switch it back to the native Tango command set.
 - **Scan direction:** if the image comes out mirrored relative to the camera, swap the x and y signs in `TangoStage.move_to`/`position`.
 - **Speed:** a pixel takes about the wait plus ~20–40 ms for the move and reads. If the stage rings after small steps, raise **Extra wait**.
+
+## Disclaimer
+
+This program was made for my own needs, based on my own experience. I make no claims about it
+compared with any other programs, and I have no knowledge of whether other systems or programs,
+which may serve larger or smaller purposes, are better or worse.
+
+## How it was built
+
+This app was built step by step with Claude (an AI assistant), using plain-language requests.
+See **[HOW_IT_WAS_BUILT.md](HOW_IT_WAS_BUILT.md)** for a summary of every request and what it added.
+To continue developing it with an AI assistant, start a new chat by giving it **[AGENTS.md](AGENTS.md)**.

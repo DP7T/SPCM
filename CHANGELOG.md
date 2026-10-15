@@ -1,6 +1,10 @@
 # Changelog
 
-## 0.9.1 (2026-10-15) - fixes after testing 0.9.0 in the lab
+## 1.0.0 (2026-10-15)
+First full release: 0.9.1, tested on the microscope. No changes to the program since 0.9.1;
+adds the licence (MIT) and the documentation (HOW_IT_WAS_BUILT.md, AGENTS.md).
+
+## 0.9.1 (2026-10-15) - fixes after testing 0.9.0 in the lab (pre-release)
 - **Laser power setting**: 2 mV steps in one direction only (never up and down) until the
   power is within the tolerance; **Abort** button for *Set power now*; *Stop & save*
   aborts the power setting before a scan (nothing is saved)
@@ -12,7 +16,7 @@
 - **.h5** (for Origin): no stage-coordinate datasets; `/power_log` is one 2-column dataset
   (time in s, power on the sample in µW). Older files still open.
 
-## 0.9.0 (2026-10-14) - in testing
+## 0.9.0 (2026-10-14) - pre-release
 First version in the repository. Includes:
 - Settings: your own `config.yaml` is created on first start from `config.default.yaml`
   and is never touched by updates (unzip or pull over the old folder safely)
