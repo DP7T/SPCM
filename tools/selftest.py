@@ -282,6 +282,19 @@ if HAVE_QT:
         shot("iv_dark")
         w._toggle_dark(False)
         shot("iv_light")
+        # Settings window: saving keeps what the main window remembered on disk
+        import tempfile
+        import yaml as _yaml
+        from settings_dialog import SettingsDialog
+        cp = os.path.join(tempfile.mkdtemp(), "config.yaml")
+        with open(cp, "w", encoding="utf-8") as fh:
+            _yaml.safe_dump({"save_dir": "data", "scan_defaults": {"file_pattern": "{n}_x"},
+                             "camera": {"flip_x": False}}, fh)
+        dlg = SettingsDialog({"save_dir": "data"}, cp, w)
+        dlg.save()
+        disk = _yaml.safe_load(open(cp, encoding="utf-8"))
+        assert disk["scan_defaults"]["file_pattern"] == "{n}_x", disk
+        assert disk["camera"]["flip_x"] is False and disk["save_dir"] == "data", disk
         w._hw_closed = True          # keep the simulated hardware for later tests
         w.close()
 

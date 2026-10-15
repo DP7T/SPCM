@@ -378,7 +378,7 @@ class MainWindow(QtWidgets.QMainWindow):
             sa = QtWidgets.QScrollArea()
             sa.setWidgetResizable(True)
             sa.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-            sa.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            sa.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
             sa.setWidget(inner)
             self.side_tabs.addTab(sa, title)
             return lay
@@ -568,6 +568,8 @@ class MainWindow(QtWidgets.QMainWindow):
         f = QtWidgets.QFormLayout(g)
         self.li_pc = QtWidgets.QLabel("-")
         self.li_r = QtWidgets.QLabel("-")
+        for lab_ in (self.li_pc, self.li_r):
+            lab_.setWordWrap(True)
         f.addRow("Photocurrent", self.li_pc)
         f.addRow("Reflection", self.li_r)
         rd = QtWidgets.QPushButton("Refresh")
@@ -661,6 +663,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         inst_lay.addStretch(1)
         self.build_iv_tab(iv_lay)
+        for cb in side.findChildren(QtWidgets.QComboBox):     # narrow drop-downs
+            cb.setSizeAdjustPolicy(
+                QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            cb.setMinimumContentsLength(10)
         left = scan_lay
         g = QtWidgets.QGroupBox("Save")
         f = QtWidgets.QFormLayout(g)
@@ -746,7 +752,9 @@ class MainWindow(QtWidgets.QMainWindow):
         auto = QtWidgets.QPushButton("Auto colour")
         auto.clicked.connect(self.reset_levels)
         bar.addWidget(auto)
-        bar.addSpacing(20)
+        bar.addStretch(1)
+        right.addLayout(bar)
+        bar = QtWidgets.QHBoxLayout()           # second row: tools drawn on the maps
         self.rois, self._roi_sync = [], False
         self.frame_btn = QtWidgets.QPushButton("Draw scan frame")
         self.frame_btn.setCheckable(True)
@@ -917,7 +925,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._save_setting("camera", "spot_y", float(p.y()))
 
     def read_z(self):
-        if self.af_thread is not None or self.thread is not None:
+        if self._busy():
             return
         try:
             self.z_lab.setText(f"{self.hw.stage.position_z():.3f}")
@@ -968,12 +976,24 @@ class MainWindow(QtWidgets.QMainWindow):
         self.statusBar().showMessage(result["message"])
         self.last_autofocus = result
 
+    def _busy(self):
+        """True while a scan, I-V, autofocus or power setting runs in the background:
+        then only that thread talks to the stage and the lock-ins (two threads asking
+        at once can mix up the replies)."""
+        return (self.thread is not None or getattr(self, "af_thread", None) is not None
+                or getattr(self, "cal_thread", None) is not None
+                or getattr(self, "ps_thread", None) is not None)
+
     def _lockin_unit(self):
-        """'A' if the photocurrent SR830 uses its current input, else 'V'."""
+        """'A' if the photocurrent SR830 uses its current input, else 'V'.
+        While busy, the value read before is used."""
+        if self._busy():
+            return getattr(self, "_lockin_unit_now", "V")
         try:
-            return self.hw.lockin_pc.input_unit()
+            self._lockin_unit_now = self.hw.lockin_pc.input_unit()
         except Exception:
-            return "V"
+            self._lockin_unit_now = "V"
+        return self._lockin_unit_now
 
     def _amp_value(self):
         m = self.amp_mode.currentData()
@@ -1037,7 +1057,7 @@ class MainWindow(QtWidgets.QMainWindow):
         li = self._laser_lockin()
         self.ps_worker = PowerSetter(self.pm, li, self.pm_target.value() * 1e-6,
                                      self.pm_tol.value(),
-                                     (self.config.get("power_set", {}) or {}).get(
+                                     (self.config.get("power_lock", {}) or {}).get(
                                          "max_amplitude_V", 5.0))
         self.ps_thread = QtCore.QThread()
         self.ps_worker.moveToThread(self.ps_thread)
@@ -1341,6 +1361,10 @@ class MainWindow(QtWidgets.QMainWindow):
             signal_as="peak")
 
     def refresh_lockins(self):
+        if self._busy():          # the running measurement is reading the lock-ins
+            self.statusBar().showMessage("The lock-ins are read when the measurement "
+                                         "has finished.")
+            return
         try:
             self._poles_now = []
             for li, lab in ((self.hw.lockin_pc, self.li_pc), (self.hw.lockin_refl, self.li_r)):
@@ -1352,7 +1376,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 except Exception:
                     poles = 4
                 self._poles_now.append(poles)
-                lab.setText(f"τ = {si(tau, 's')}, {6 * poles} dB/oct,  "
+                lab.setText(f"τ = {si(tau, 's')}, {6 * poles} dB/oct\n"
                             f"sens = {si(li.sensitivity(), 'V/A')}")
         except Exception as e:
             self.statusBar().showMessage(f"Lock-in read failed: {e}")
@@ -1434,6 +1458,9 @@ class MainWindow(QtWidgets.QMainWindow):
                         label=f"({self.xc.value():.2f}, {self.yc.value():.2f}) µm")
 
     def centre_here(self):
+        if self._busy():
+            self.error("Wait until the measurement / autofocus has finished.")
+            return
         try:
             x, y = self.hw.stage.position()
             self.set_origin(x, y)
@@ -1533,9 +1560,18 @@ class MainWindow(QtWidgets.QMainWindow):
             "Check the step, then press Start scan.")
 
     def goto_stage(self, x, y, label="", mark=None):
-        if self.thread is not None:
+        if self._busy():
             return
         try:
+            px, py = self.hw.stage.position()
+            dist = float(np.hypot(x - px, y - py))
+            if dist > 500 and QtWidgets.QMessageBox.question(
+                    self, "SPCM",
+                    f"This moves the stage {dist / 1000:.2f} mm.\n\n"
+                    f"Stage now: x = {px:.1f}, y = {py:.1f} µm\n"
+                    f"Target: x = {x:.1f}, y = {y:.1f} µm\n\nMove there?") != \
+                    QtWidgets.QMessageBox.StandardButton.Yes:
+                return
             self.hw.stage.move_to(x, y)
             if mark is not None:
                 for p in (self.pc_panel, self.r_panel):
@@ -1933,6 +1969,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 self, "SPCM", "Stop and delete this scan?\nNothing of it will be saved.") \
                 != QtWidgets.QMessageBox.StandardButton.Yes:
             return
+        if not self.worker:      # it finished (and was saved) while the question was open
+            self.statusBar().showMessage("It had already finished and is saved.")
+            return
         self._discard = True
         self.worker.stop()
         self.statusBar().showMessage("Stopping, the scan will be discarded…")
@@ -2120,7 +2159,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _nothing_saved(self, path):
         """The run stopped before any data was taken (e.g. power setting aborted)."""
-        if path:
+        if path and os.path.exists(path):
             return False
         self._cleanup()
         self.statusBar().showMessage("Stopped before the measurement started - "

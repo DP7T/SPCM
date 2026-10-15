@@ -132,6 +132,7 @@ class SettingsDialog(QtWidgets.QDialog):
         f = QtWidgets.QFormLayout(g)
         row = QtWidgets.QHBoxLayout()
         self.save_dir = QtWidgets.QLineEdit(str(c.get("save_dir", "data")))
+        self._save_dir0 = self.save_dir.text()
         browse = QtWidgets.QPushButton("Browse…")
         browse.clicked.connect(self.browse)
         row.addWidget(self.save_dir, 1)
@@ -230,7 +231,27 @@ class SettingsDialog(QtWidgets.QDialog):
             QtWidgets.QMessageBox.critical(self, "Test SR570", f"Could not open {port}:\n{e}")
 
     def save(self):
-        c = self.config
+        """Write only what this window edits into config.yaml. Everything else in
+        the file (scan defaults, camera flip, file-name pattern ... remembered by
+        the main window during the session) is kept as it is on disk."""
+        try:
+            with open(self.path, encoding="utf-8-sig") as f:
+                disk = yaml.safe_load(f) or {}
+        except FileNotFoundError:
+            disk = {}
+        # an unchanged folder stays as written in the file (e.g. "data", relative)
+        if self.save_dir.text() == self._save_dir0 and "save_dir" in disk:
+            save_dir = disk["save_dir"]
+        else:
+            save_dir = self.save_dir.text() or "data"
+        for c in (self.config, disk):
+            self._apply(c, save_dir)
+        with open(self.path, "w", encoding="utf-8") as f:
+            f.write("# SPCM settings - edited from the Settings window\n")
+            yaml.safe_dump(disk, f, sort_keys=False, allow_unicode=True)
+        self.accept()
+
+    def _apply(self, c, save_dir):
         c.setdefault("stage", {})["port"] = self._value(self.stage_port)
         c["stage"]["invert_x"] = self.inv_x.isChecked()
         c["stage"]["invert_y"] = self.inv_y.isChecked()
@@ -251,9 +272,5 @@ class SettingsDialog(QtWidgets.QDialog):
         cam = c.setdefault("camera", {})
         cam["enabled"] = self.cam_on.isChecked()
         cam["exposure_ms"] = round(self.cam_exp.value(), 2)
-        c["save_dir"] = self.save_dir.text() or "data"
+        c["save_dir"] = save_dir
         c["simulate"] = False
-        with open(self.path, "w", encoding="utf-8") as f:
-            f.write("# SPCM settings - edited from the Settings window\n")
-            yaml.safe_dump(c, f, sort_keys=False, allow_unicode=True)
-        self.accept()

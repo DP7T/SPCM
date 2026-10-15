@@ -104,10 +104,12 @@ class TangoStage:
     def position_z(self):
         return self._numbers(self.query("?pos"), 3, "?pos")[2]
 
-    def move_z(self, z):
-        """Absolute focus move (µm) of the z axis only."""
+    def move_z(self, z, tol_um=0.25):
+        """Absolute focus move (µm) of the z axis only. Like move_to, it returns
+        only when z has stopped AND reports the target (the status alone can say
+        'not moving' before the move has started)."""
         self.write(f"!moa z {z:.3f}")
-        self._wait()
+        self._wait(target_z=z, tol=tol_um)
 
     def move_to(self, x, y, tol_um=0.25):
         """Absolute move; returns only when the stage reports it is no longer
@@ -128,7 +130,7 @@ class TangoStage:
     def set_velocity(self, v):
         self.write(f"!vel x {v:.6g}")
 
-    def _wait(self, target=None, tol=0.25):
+    def _wait(self, target=None, tol=0.25, target_z=None):
         t0 = time.time()
         time.sleep(self.poll_interval)
         while True:
@@ -136,11 +138,15 @@ class TangoStage:
                 self.stop()
                 raise TimeoutError("Tango: move timed out")
             if not self.is_moving():
-                if target is None:
+                if target is None and target_z is None:
                     return
-                px, py = self.position()
-                if abs(px - target[0]) <= tol and abs(py - target[1]) <= tol:
-                    return
+                if target_z is not None:
+                    if abs(self.position_z() - target_z) <= tol:
+                        return
+                else:
+                    px, py = self.position()
+                    if abs(px - target[0]) <= tol and abs(py - target[1]) <= tol:
+                        return
                 if time.time() - t0 > 3.0 and not self.is_moving():
                     # stopped but not on target (e.g. encoder deadband): accept,
                     # the scan's own safety check catches anything large

@@ -1,6 +1,20 @@
 # Changelog
 
-## 1.1.0 (in testing)
+## 1.1.1 (in testing)
+- **Set power now** respects *Never set SINE OUT above* from Settings (it used the
+  default 5 V before - also in 1.0)
+- While a measurement runs, the window no longer talks to the stage or the lock-ins
+  (Refresh, Set origin, Read z, double-click a map): two programs asking at once can mix
+  up the replies
+- Double-click on a map and *Go to start position* ask before moving more than 0.5 mm
+- Settings window: *Save and restart* keeps everything else remembered in config.yaml
+- Focus (z) moves wait until z is really at the target (more reliable autofocus)
+- *Stop & discard* no error if the measurement finishes meanwhile; no empty .h5 when a
+  scan stops before its first line
+- Quick I–V: plot follows the light/dark theme; no invert option (use the SR570's INVERT)
+- Fits smaller screens: map tools on a second row, side panel scrolls sideways if needed
+
+## 1.1.0 (pre-release)
 - **Quick I–V**: DC current vs SR570 bias through AUX IN 1 of the photocurrent SR830;
   cycles 0 → max → min → 0; SR570 sensitivity entered by hand; reminders to re-cable and
   re-set the SR570 when switching between maps and I–V; stops above 10 V SR570 output

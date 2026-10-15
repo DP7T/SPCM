@@ -293,7 +293,7 @@ class ScanData:
 def update_experiment(path, conditions, notes):
     """Rewrite the experiment notes of a saved file (e.g. typed during the scan)."""
     import h5py
-    with h5py.File(path, "a") as f:
+    with h5py.File(path, "r+") as f:      # never creates a new (empty) file
         base = f["info"] if "info" in f else f
         if "experiment" in base:
             del base["experiment"]
