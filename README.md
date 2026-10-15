@@ -52,6 +52,8 @@ If the SR570 isn't plugged in, the program still starts. It warns you and runs w
 
 ## Using it
 
+The window: on the left the tabs **Map**, **Point sweep**, **I–V** and **Instruments** (the Start button starts what is on the open tab); on the right **Maps**, **Camera**, **Plot** (line scans, point sweeps and I–V curves) and **Experiment notes**. Small **?** buttons explain each part.
+
 The left side has two tabs:
 - **Scan**: scan area, focus, timing, bias and save.
 - **Instruments**: photocurrent amplifier, lock-in readout and laser power.
@@ -72,7 +74,7 @@ The left side has two tabs:
   - *SR570 current preamp*: value × sensitivity, in amperes. Choose the same sensitivity as on the SR570 front panel.
   - *SR560 voltage preamp*: value ÷ gain, in volts. Pick the gain from the list, matching the SR560 front panel.
   - In every case the value is also multiplied by **√2**. The SR830 reads rms, and this turns it into the peak amplitude.
-- **Series** (Scan tab): one map per value of
+- **Series** (Map tab): one map per value of
   - **Bias** (V): only with the SR570 current preamp, because the bias comes from the SR570. Enter `0, 0.5, 1` or `-2:2:0.5`. The bias ramps gently between values and returns to 0 V at the end, when you press Stop, and when an error occurs.
   - **Laser power on sample** (µW), e.g. `5, 10, 20` or `1:100:*2`: before each map the SINE OUT is moved in 2 mV steps (one direction) to the power closest to each value, at the scan's start position; the power reached is saved with that map. At the end the SINE OUT goes back in 2 mV steps. Needs the power meter.
 
@@ -102,12 +104,12 @@ The left side has two tabs:
   - To protect the objective, you can set absolute `z_min` / `z_max` limits in `config.yaml`.
 - **Camera view**: the *Flip left-right* and *Flip up-down* boxes in the Camera tab make the image match how you see the sample. They are remembered.
 - **Angle (°)** (Scan area) rotates the scan frame counter-clockwise around the start position. This works in Step mode only.
-- **Draw a frame on a map:** press **Draw scan frame** above the maps. A cyan frame appears on both maps:
+- **Draw a frame on a map:** choose **Draw ▾ → Scan frame** above the maps. A cyan frame appears on both maps:
   - Drag it to move it.
   - Drag the square handles to resize it.
   - Drag the round handle to rotate it.
 
-  Then press **Scan this frame**: the start position, size, direction and angle are filled in for you. Check the step and press Start scan. It also works on a scan you opened from a file, as long as the origin is the same spot.
+  Then press **Scan this frame** (it appears once the frame is drawn): the start position, size, direction and angle are filled in for you. Check the step and press Start scan. It also works on a scan you opened from a file, as long as the origin is the same spot.
 - Double-click a map to park the laser on that spot, for example before a point sweep or a quick I–V.
 - If the photocurrent lock-in overloads, a warning appears in the status bar.
 
@@ -121,7 +123,7 @@ The left side has two tabs:
 3. **Readings per point** (10 by default): after the lock-ins have settled (the same wait as in Timing), this many readings are taken about one time constant apart. The mean is saved, and their standard deviation is the error bar.
 4. Press **Start sweep** (the Start button changes its name on this tab). Stop & save / Stop & discard work as for maps.
 
-The **Point sweep** tab on the right shows the result live:
+The **Plot** tab on the right shows the result live:
 - signal vs power (or bias), with error bars;
 - for power sweeps, a **log-log plot** with a fitted power law |S| = A·P^α and the value of α (one per bias);
 - for bias × power, one curve per bias (with a legend) and a **bias–power map** coloured by the photocurrent or photovoltage.
@@ -130,9 +132,9 @@ Afterwards the SINE OUT goes back to where it was in 2 mV steps (untick *Put the
 
 ## Line scans
 
-1. Press **Draw line** above the maps. A yellow line appears on both maps; drag its ends (or the whole line) where you want it. The status bar shows its length and the number of points.
-2. Press **Scan this line**. The laser steps along the line at any angle, using the **Step**, **Timing** and **Series** from the Scan tab and the laser-power setting from the Instruments tab.
-3. The **Line scan** tab on the right shows the signal and the reflection vs the distance along the line, one curve per value. With a **Series** of biases or laser powers you also get the **distance × bias** (or **distance × power**) image.
+1. Choose **Draw ▾ → Line to scan along** above the maps. A yellow line appears on both maps; drag its ends (or the whole line) where you want it. The status bar shows its length and the number of points.
+2. Press **Scan this line** (it appears once the line is drawn). The laser steps along the line at any angle, using the **Step**, **Timing** and **Series** from the Map tab and the laser-power setting from the Instruments tab.
+3. The **Plot** tab on the right shows the signal and the reflection vs the distance along the line, one curve per value. With a **Series** of biases or laser powers you also get the **distance × bias** (or **distance × power**) image.
 
 You can draw the line on the camera image too, once the camera is calibrated. Line scans get their own folder too (`line` in the name): the .h5 has the same layout as maps, with 1-row images plus `distance_um` and the x, y of every point; a PNG; and `_csv/line.csv` (numbers only, columns listed in `info.txt`).
 
@@ -152,7 +154,7 @@ If the image couldn't be matched (out of focus, no structure, move too small or 
 
 ## Quick I–V (DC, without moving the probes)
 
-The **Quick I–V** tab measures the DC current against the bias from the SR570, with the laser spot wherever it is.
+The **I–V** tab (left) measures the DC current against the bias from the SR570, with the laser spot wherever it is.
 
 **Set-up:** the SR570 output goes to **AUX IN 1** on the rear of the photocurrent SR830 instead of the lock-in input, and the SR570 runs with **filter OFF** and **LOW DRIFT**. The program reminds you each time you switch between maps and I–V, both ways. It can't check these settings, because the SR570 can't be read.
 
@@ -164,7 +166,7 @@ The **Quick I–V** tab measures the DC current against the bias from the SR570,
 - **Sensitivity**: the SR570 front-panel sensitivity. The current is AUX IN voltage × sensitivity, so this must match the front panel.
 - **Sign:** if a positive bias gives a negative current, use the SR570's own **INVERT** button.
 
-Press **Start I–V**, the Start button on this tab. The **I–V** tab on the right shows the curve live, one colour per cycle.
+Press **Start I–V**, the Start button on this tab. The **Plot** tab on the right shows the curve live, one colour per cycle.
 
 **Safety:**
 - The bias ramps back to 0 V at the end, on Stop and on errors.
@@ -179,7 +181,7 @@ Press **Start I–V**, the Start button on this tab. The **I–V** tab on the ri
 ## Measuring the resolution
 
 1. Measure or open a reflection map that crosses a sharp edge, such as a gold electrode. Use a step well below the spot size, ideally ≤ 100 nm.
-2. Press **Measure resolution** above the maps. An orange line appears on the reflection map. Drag it across the edge. The side handle widens the band that is averaged, which helps with noisy maps.
+2. Choose **Draw ▾ → Resolution line** above the maps. An orange line appears on the reflection map. Drag it across the edge. The side handle widens the band that is averaged, which helps with noisy maps.
 3. A window shows the reflection profile with an edge fit, and its derivative with the matching Gaussian, which is the spot's line profile:
    - **FWHM** of the spot and the **10–90 % edge width**;
    - the **diffraction limit** 0.51 λ/NA for comparison. Type the objective's **NA**; λ is taken from the power meter wavelength.

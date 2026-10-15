@@ -13,6 +13,10 @@
 - Lists accept `1:100:*2` (multiply each step); the stop value is always included
 - **Measure resolution** refuses lines that don't cross a clear edge
 - All new measurements are saved like maps: own folder, name pattern, numbers-only CSV
+- Calmer window: left tabs Map / Point sweep / I–V / Instruments; one **Plot** tab on the
+  right for line scans, point sweeps and I–V; one **Draw ▾** menu for frame, line and
+  resolution line ('Scan this …' appears once something is drawn); explanations behind
+  small **?** buttons instead of grey text
 
 ## 1.1.1 (in testing)
 - **Set power now** respects *Never set SINE OUT above* from Settings (it used the

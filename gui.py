@@ -414,9 +414,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.side_tabs.addTab(sa, title)
             return lay
 
-        scan_lay = page("Scan")
+        scan_lay = page("Map")
         sweep_lay = page("Point sweep")
-        iv_lay = page("Quick I–V")
+        iv_lay = page("I–V")
         inst_lay = page("Instruments")
         left = scan_lay
 
@@ -835,7 +835,27 @@ class MainWindow(QtWidgets.QMainWindow):
             "Drag the side handle to average over a wider band.")
         self.res_btn.toggled.connect(self.toggle_resolution)
         bar.addWidget(self.res_btn)
+        # the three toggle buttons stay as state holders, the user sees one menu
+        for b_ in (self.frame_btn, self.line_btn, self.res_btn):
+            b_.setVisible(False)
+        self.draw_btn = self._draw_menu([
+            ("Scan frame (move, resize, rotate)", self.frame_btn),
+            ("Line to scan along", self.line_btn),
+            ("Resolution line (reflection map)", self.res_btn)])
+        bar.insertWidget(0, self.draw_btn)
+        self.use_frame_btn.setVisible(False)
+        self.use_line_btn.setVisible(False)
         bar.addStretch(1)
+        bar.addWidget(self._help_btn(
+            "Maps",
+            "• Double-click a map to move the laser there (when idle).\n"
+            "• Drag the dashed line for a line cut; drag the colour bar to set the scale.\n"
+            "• Draw ▸ Scan frame: move, resize and rotate the frame over the area you want, "
+            "then press 'Scan this frame' (fills in the Map tab).\n"
+            "• Draw ▸ Line to scan along: drag its two ends, then 'Scan this line'. Step, "
+            "timing and series come from the Map tab.\n"
+            "• Draw ▸ Resolution line: put it across a sharp edge on the reflection map; the "
+            "spot size (FWHM) is fitted."))
         right.addLayout(bar)
 
         self.tabs = QtWidgets.QTabWidget()
@@ -850,6 +870,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs.addTab(maps_w, "Maps")
         if self.cam is not None:
             self.tabs.addTab(self.build_camera_tab(), "Camera")
+        self.plot_stack = QtWidgets.QStackedWidget()
+        ph = QtWidgets.QLabel("Line scans, point sweeps and I–V curves appear here.")
+        ph.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        ph.setStyleSheet("color:gray")
+        self.plot_stack.addWidget(ph)
+        self.tabs.addTab(self.plot_stack, "Plot")
         self.tabs.addTab(self.build_experiment_tab(), "Experiment notes")
         # a GraphicsLayoutWidget (like the maps) so it follows the light/dark theme
         self.iv_glw = pg.GraphicsLayoutWidget()
@@ -859,23 +885,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.iv_plot.showGrid(x=True, y=True, alpha=0.25)
         self.iv_legend = self.iv_plot.addLegend(offset=(10, 10))
         self.iv_data = None
-        self.tabs.addTab(self.iv_glw, "I–V")
+        self.plot_stack.addWidget(self.iv_glw)
         from sweep_view import SweepView, LineView
         self.line_view = LineView()
-        self.tabs.addTab(self.line_view, "Line scan")
+        self.plot_stack.addWidget(self.line_view)
         self.line_data = None
         self.sweep_view = SweepView()
-        self.tabs.addTab(self.sweep_view, "Point sweep")
+        self.plot_stack.addWidget(self.sweep_view)
         self.sweep_data = None
         self.side_tabs.currentChanged.connect(self._side_tab_changed)
         for p in (self.pc_panel, self.r_panel):
             p.clicked.connect(self.goto)
-        hint = QtWidgets.QLabel("Double-click a map to move the laser there (when idle). "
-                                "Drag the dashed line for a line cut. "
-                                "Drag the colour bar to set the scale.")
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color:gray")
-        right.addWidget(hint)
 
         for w in (self.ch_pc, self.ch_r, self.map_sel):
             w.currentIndexChanged.connect(self.redraw)
@@ -1357,10 +1377,26 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cam_line_btn.toggled.connect(self.toggle_cam_line)
         self.cam_use_line = QtWidgets.QPushButton("Scan this line")
         self.cam_use_line.clicked.connect(self.use_cam_line)
-        for b_ in (self.cam_frame_btn, self.cam_use_frame, self.cam_line_btn,
+        self.cam_draw = self._draw_menu([("Scan frame (move, resize, rotate)",
+                                          self.cam_frame_btn),
+                                         ("Line to scan along", self.cam_line_btn)])
+        for b_ in (self.cam_draw, self.cam_frame_btn, self.cam_use_frame, self.cam_line_btn,
                    self.cam_use_line):
             bar2.addWidget(b_)
+        for b_ in (self.cam_frame_btn, self.cam_line_btn, self.cam_use_frame,
+                   self.cam_use_line):
+            b_.setVisible(False)
         bar2.addStretch(1)
+        bar2.addWidget(self._help_btn(
+            "Camera",
+            "• Drag the cyan cross onto the laser spot once; it marks where the scan "
+            "pixel is.\n"
+            "• Calibrate camera (once, and after changing the objective): focus, put the "
+            "cross on the laser spot, go to a place with clear structure (an electrode or "
+            "flake corner) and press the button. The stage moves a few µm and comes back.\n"
+            "• After calibrating: double-click the image to move the laser there, and use "
+            "Draw ▾ for a scan frame or a line on the live image (they stay on the sample "
+            "when the stage moves), then 'Scan this frame' / 'Scan this line'."))
         lay.addLayout(bar2)
         self._show_cal()
         glw = pg.GraphicsLayoutWidget()
@@ -1383,13 +1419,6 @@ class MainWindow(QtWidgets.QMainWindow):
             self.cam_cross.setPos(float(cc["spot_x"]), float(cc["spot_y"]))
         self.cam_cross.sigPositionChangeFinished.connect(self._cross_moved)
         lay.addWidget(glw, 1)
-        hint = QtWidgets.QLabel("Drag the cyan cross onto the laser spot once; it marks "
-                                "where the scan pixel is. After 'Calibrate camera': "
-                                "double-click the image to move the laser there, and draw "
-                                "scan frames and lines on it.")
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color:gray")
-        lay.addWidget(hint)
         self.cam_timer = QtCore.QTimer(self)
         self.cam_timer.timeout.connect(self.update_camera)
         self.cam_timer.start(100)
@@ -1414,6 +1443,8 @@ class MainWindow(QtWidgets.QMainWindow):
             b_.setToolTip("" if ok else "Calibrate the camera first")
         self.cam_use_frame.setEnabled(ok and self.cam_frame_btn.isChecked())
         self.cam_use_line.setEnabled(ok and self.cam_line_btn.isChecked())
+        self.cam_draw.setEnabled(ok)
+        self.cam_draw.setToolTip("" if ok else "Calibrate the camera first")
 
     def calibrate_camera(self):
         if getattr(self, "cal_thread", None) is not None:
@@ -1520,6 +1551,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for r in self.cam_rois:
             r.setVisible(on)
         self.cam_use_frame.setEnabled(on)
+        self.cam_use_frame.setVisible(on)
 
     def toggle_cam_line(self, on):
         if on and not self.cam_line:
@@ -1534,6 +1566,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for r in self.cam_line:
             r.setVisible(on)
         self.cam_use_line.setEnabled(on)
+        self.cam_use_line.setVisible(on)
 
     def _cam_to_stage(self, pts):
         cur = self.hw.stage.position()
@@ -1543,7 +1576,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self.cam_rois or self.cal is None or self._busy():
             return
         if self.origin_xy is None:
-            self.error("Set the origin first (Scan tab).")
+            self.error("Set the origin first (Map tab).")
             return
         try:
             self._apply_frame(*self._cam_to_stage(self._roi_corners(self.cam_rois[0])))
@@ -1624,7 +1657,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if k == "power" and self.accessory("powermeter") is None:
             note = "<span style='color:#c62828'>A power series needs the power meter " \
                    "(Hardware → Settings).</span>"
-        self.ser_note.setText(note)
+        warn = note.startswith("<span")
+        self.ser_note.setText(note if warn else "")
+        self.ser_note.setVisible(warn)
+        self.ser_kind.setToolTip(self.SER_NOTES[k])
         self._remember_series()
 
     def _remember_series(self):
@@ -1854,6 +1890,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for r in self.rois:
             r.setVisible(on)
         self.use_frame_btn.setEnabled(on)
+        self.use_frame_btn.setVisible(on)
 
     def _frame_info(self):
         if not self.rois:
@@ -1973,6 +2010,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for r in self.line_rois:
             r.setVisible(on)
         self.use_line_btn.setEnabled(on)
+        self.use_line_btn.setVisible(on)
 
     def _line_ends(self):
         """Ends of the drawn line in the map's axes (u, v)."""
@@ -2034,7 +2072,7 @@ class MainWindow(QtWidgets.QMainWindow):
                                  name=self.measurement_name("line", s))
         self.line_data = self.worker.data
         self.line_data.path = self.worker.path
-        self.tabs.setCurrentWidget(self.line_view)
+        self.show_plot(self.line_view)
         self._redraw_line()
         self.thread = QtCore.QThread()
         self.worker.moveToThread(self.thread)
@@ -2127,11 +2165,6 @@ class MainWindow(QtWidgets.QMainWindow):
         row.addWidget(self.sw_pos, 1)
         row.addWidget(rd)
         f.addRow("Laser at", row)
-        hint = QtWidgets.QLabel("The sweep runs where the laser is now. Double-click a map "
-                                "to move the laser to a spot (or use the joystick).")
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color:gray")
-        f.addRow(hint)
         lay.addWidget(g)
 
         g = QtWidgets.QGroupBox("Sweep")
@@ -2174,13 +2207,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sw_eta = QtWidgets.QLabel("-")
         f.addRow("Est. time", self.sw_eta)
         lay.addWidget(g)
-        expl = QtWidgets.QLabel(
-            "Each point: set the power and/or bias → wait until the lock-ins have "
-            "settled (Timing, Scan tab) → take the readings. The plots appear in the "
-            "'Point sweep' tab on the right. Saved like maps: .h5, CSV and a PNG.")
-        expl.setWordWrap(True)
-        expl.setStyleSheet("color:gray")
-        lay.addWidget(expl)
+        row = QtWidgets.QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(self._help_btn(
+            "Point sweep",
+            "• The sweep runs where the laser is now. Double-click a map (or the calibrated "
+            "camera) to move the laser to a spot, or use the joystick.\n"
+            "• Each point: set the power and/or bias → wait until the lock-ins have settled "
+            "(Timing, Map tab) → take the readings (mean ± spread).\n"
+            "• Powers are set with 2 mV SINE OUT steps in one direction; the power reached "
+            "is saved.\n"
+            "• The plots appear in the Plot tab. Saved like maps: own folder, .h5, CSV, PNG."))
+        lay.addLayout(row)
         lay.addStretch(1)
         self.sw_kind.currentIndexChanged.connect(self._sweep_kind_changed)
         for w in (self.sw_powers, self.sw_biases):
@@ -2248,7 +2286,7 @@ class MainWindow(QtWidgets.QMainWindow):
             if bad:
                 raise ValueError(f"Bias {bad[0]} V exceeds the limit of {lim} V.")
         if self.origin_xy is None:
-            raise ValueError("Set the origin first (Scan tab).")
+            raise ValueError("Set the origin first (Map tab).")
         X, Y = self.hw.stage.position()
         u, v = self.stage_to_user(X, Y)
         lc = self.config.get("power_lock", {}) or {}
@@ -2307,7 +2345,7 @@ class MainWindow(QtWidgets.QMainWindow):
                                   name=self.measurement_name(s.kind, s))
         self.sweep_data = self.worker.data
         self.sweep_data.path = self.worker.path
-        self.tabs.setCurrentWidget(self.sweep_view)
+        self.show_plot(self.sweep_view)
         self._redraw_sweep()
         self.thread = QtCore.QThread()
         self.worker.moveToThread(self.thread)
@@ -2413,24 +2451,23 @@ class MainWindow(QtWidgets.QMainWindow):
         self.iv_sens.setToolTip("Set this to the SR570 front-panel sensitivity. The SR570 "
                                 "can't be read, so the current is calculated with this value.")
         f.addRow("Sensitivity", self.iv_sens)
-        aux = QtWidgets.QLabel("Reads the SR570 output on AUX IN 1 of the photocurrent "
-                               "SR830 (rear panel).")
-        aux.setWordWrap(True)
-        aux.setStyleSheet("color:gray")
-        f.addRow(aux)
         lay.addWidget(g)
         self.iv_note = QtWidgets.QLabel()
         self.iv_note.setWordWrap(True)
         self.iv_note.setStyleSheet("color:#c62828")
         lay.addWidget(self.iv_note)
-        expl = QtWidgets.QLabel(
-            "Before an I–V you'll be reminded to set the SR570 filter OFF and LOW DRIFT and to "
-            "move its output cable to AUX IN 1; before the next map, to change them back. "
-            "The bias ramps back to 0 V at the end, on Stop and on errors. The sweep stops "
-            "if the SR570 output goes above 10 V.")
-        expl.setWordWrap(True)
-        expl.setStyleSheet("color:gray")
-        lay.addWidget(expl)
+        row = QtWidgets.QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(self._help_btn(
+            "Quick I–V",
+            "• DC current vs the SR570 bias. The SR570 output goes to AUX IN 1 on the rear "
+            "of the photocurrent SR830 (instead of the lock-in input).\n"
+            "• You'll be reminded to set the SR570 filter OFF and LOW DRIFT and to move the "
+            "cable; before the next map, to change them back.\n"
+            "• Current = AUX IN voltage × the sensitivity selected here.\n"
+            "• The bias ramps back to 0 V at the end, on Stop and on errors. The sweep stops "
+            "if the SR570 output goes above 10 V. The curve appears in the Plot tab."))
+        lay.addLayout(row)
         lay.addStretch(1)
         for w in (self.iv_max, self.iv_min, self.iv_step, self.iv_wait):
             w.valueChanged.connect(self.update_iv_eta)
@@ -2513,7 +2550,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker = iv.IVWorker(self.hw, s, self.folder.text() or "data",
                                   name=self.measurement_name("iv", s))
         self.iv_data = self.worker.data
-        self.tabs.setCurrentWidget(self.iv_glw)
+        self.show_plot(self.iv_glw)
         self._redraw_iv()
         self.thread = QtCore.QThread()
         self.worker.moveToThread(self.thread)
@@ -2747,6 +2784,40 @@ class MainWindow(QtWidgets.QMainWindow):
         self._discard = True
         self.worker.stop()
         self.statusBar().showMessage("Stopping, the scan will be discarded…")
+
+    # -- small helpers for a calm window --
+    def _help_btn(self, title, text):
+        """A small '?' button: the explanation as tooltip, and in a window on click."""
+        b = QtWidgets.QToolButton()
+        b.setText("?")
+        b.setToolTip(text)
+        b.setAutoRaise(True)
+        b.setStyleSheet("font-weight:bold")
+        b.clicked.connect(lambda: QtWidgets.QMessageBox.information(self, title, text))
+        return b
+
+    def _draw_menu(self, items):
+        """'Draw ▾' button whose menu switches the given checkable buttons on/off."""
+        tb = QtWidgets.QToolButton()
+        tb.setText("Draw ▾")
+        tb.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QtWidgets.QMenu(tb)
+        for label, btn in items:
+            act = menu.addAction(label)
+            act.setCheckable(True)
+            act.toggled.connect(btn.setChecked)
+            btn.toggled.connect(lambda on, a=act: a.isChecked() != on and a.setChecked(on))
+        tb.setMenu(menu)
+        return tb
+
+    def show_plot(self, w):
+        """Show a line scan / point sweep / I-V plot in the Plot tab."""
+        self.plot_stack.setCurrentWidget(w)
+        name = {self.iv_glw: "I–V", self.line_view: "line scan",
+                self.sweep_view: "point sweep"}.get(w, "")
+        i = self.tabs.indexOf(self.plot_stack)
+        self.tabs.setTabText(i, f"Plot: {name}" if name else "Plot")
+        self.tabs.setCurrentWidget(self.plot_stack)
 
     # -- measurement names --
     def _fill_name_menu(self):
@@ -2985,6 +3056,8 @@ class MainWindow(QtWidgets.QMainWindow):
         scale currently shown (Manual limits are kept; otherwise symmetric).
         On the Line scan / Point sweep / I-V tab: that plot's figure."""
         w = self.tabs.currentWidget()
+        if w is self.plot_stack:
+            w = self.plot_stack.currentWidget()
         other = {self.line_view: ("line_data", "linescan"),
                  self.sweep_view: ("sweep_data", "sweeps"),
                  self.iv_glw: ("iv_data", "iv")}.get(w)
@@ -3052,21 +3125,21 @@ class MainWindow(QtWidgets.QMainWindow):
                 if iv.is_iv_file(path):
                     self.iv_data = iv.load_iv(path)
                     self._redraw_iv()
-                    self.tabs.setCurrentWidget(self.iv_glw)
+                    self.show_plot(self.iv_glw)
                     self.statusBar().showMessage(f"Loaded {path}")
                     return
                 from sweeps import is_sweep_file, load_sweep
                 if is_sweep_file(path):
                     self.sweep_data = load_sweep(path)
                     self._redraw_sweep()
-                    self.tabs.setCurrentWidget(self.sweep_view)
+                    self.show_plot(self.sweep_view)
                     self.statusBar().showMessage(f"Loaded {path}")
                     return
                 d = load(path)
                 if getattr(d.settings, "scan_type", "map") == "line":
                     self.line_data = d
                     self._redraw_line()
-                    self.tabs.setCurrentWidget(self.line_view)
+                    self.show_plot(self.line_view)
                     self.statusBar().showMessage(f"Loaded {path}")
                     return
                 self.data = d

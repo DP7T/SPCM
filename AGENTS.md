@@ -92,7 +92,7 @@ the real hardware and report back with screenshots. Write in plain language for 
 - **After each scan:** CSV export and the PNG figure are written automatically. Stop & discard deletes them.
 
 **GUI**
-- Layout: scrollable left tabs (Scan / Instruments), maps on the right.
+- Layout (1.2): left tabs Map / Point sweep / I–V / Instruments (Start runs the open tab's measurement); right tabs Maps / Camera / Plot (one stacked widget for line scans, point sweeps, I–V: `show_plot`) / Experiment notes. Drawing tools behind one **Draw ▾** menu (`_draw_menu`; the old checkable buttons are hidden state holders). Explanations go behind **?** buttons (`_help_btn`), not as grey text: the user found the window overwhelming.
 - Optional dark theme. Camera view is flipped left-right by default.
 
 ## How to test without hardware
