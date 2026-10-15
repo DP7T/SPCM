@@ -311,9 +311,9 @@ if HAVE_QT:
         print("      " + w.name_preview.text())
         # fine map across an electrode edge, then "Measure resolution"
         w.set_origin(0.0, 0.0)
-        w.xc.setValue(3)
+        w.xc.setValue(1)
         w.yc.setValue(-1)
-        w.xs_.setValue(4)
+        w.xs_.setValue(8)
         w.ys_.setValue(2)
         w.step.setValue(200)
         w.start()
