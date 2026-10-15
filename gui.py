@@ -1343,8 +1343,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cal_lab.setWordWrap(True)
         self.cal_lab.setMinimumWidth(120)
         self.cal_lab.setStyleSheet("color:gray")
-        bar2.addWidget(self.cal_lab)
-        bar2.addSpacing(15)
+        bar2.addWidget(self.cal_lab, 1)
+        lay.addLayout(bar2)
+        bar2 = QtWidgets.QHBoxLayout()          # third row: frame and line on the image
         self.cam_rois, self.cam_line = [], []
         self.cam_frame_btn = QtWidgets.QPushButton("Draw scan frame")
         self.cam_frame_btn.setCheckable(True)
