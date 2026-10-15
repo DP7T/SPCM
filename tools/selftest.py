@@ -61,6 +61,52 @@ def run_worker(w):
     return w.path
 
 
+@check("file names")
+def _():
+    import naming
+    import tempfile
+    v = dict(sample="flake A", date="20261015", size="20x20um", step="500nm",
+             power="10uW", type="line", Temperature="4.2 K")
+    t = tempfile.mkdtemp()
+    assert naming.make_name(naming.DEFAULT_PATTERN, v, t) == \
+        "flake-A_20261015_20x20um_500nm_10uW_001"
+    os.makedirs(os.path.join(t, "flake-A_20261015_20x20um_500nm_10uW_001"))
+    assert naming.make_name(naming.DEFAULT_PATTERN, v, t).endswith("_002")
+    assert naming.make_name(naming.pattern_for(naming.DEFAULT_PATTERN, "line"), v, t) \
+        == "flake-A_20261015_20x20um_500nm_10uW_line_001"
+    assert naming.make_name("{sample}_{temperature}", v, t) == "flake-A_4.2-K"
+
+
+@check("laser power: monotonic 2 mV steps, abort")
+def _():
+    from scanner import set_laser_power
+    pm = next(a for a in HW.accessories if a.name == "powermeter")
+    li = HW.lockin_pc
+    li.set_sine_amplitude(1.0)
+    seen = []
+    orig = li.set_sine_amplitude
+
+    def spy(v):
+        seen.append(v)
+        return orig(v)
+    li.set_sine_amplitude = spy
+    try:
+        for target, tol in ((pm.power() * 0.9, 1.0), (pm.power() * 1.05, 0.0)):
+            seen.clear()
+            r = set_laser_power(pm, li, target, tol)
+            steps = np.diff(seen)
+            assert r["ok"], r["message"]
+            assert np.all(np.abs(np.abs(steps) - 0.002) < 1e-6), "not 2 mV steps"
+            assert np.all(np.sign(steps[:-1]) == np.sign(steps[0])), "went up and down"
+        k = [0]
+        r = set_laser_power(pm, li, target * 0.5, 1.0,
+                            stop=lambda: k.__setitem__(0, k[0] + 1) or k[0] > 5)
+        assert r["aborted"]
+    finally:
+        li.set_sine_amplitude = orig
+        li.set_sine_amplitude(1.0)
+
+
 @check("parse lists")
 def _():
     from scanner import parse_list
@@ -77,11 +123,21 @@ def _():
     s = ScanSettings(x_center=-8, y_center=-6, x_size=16, y_size=12, step=1.0,
                      serpentine=False, biases=[0.0, 0.5], amp_mode="sr570",
                      amp_value=1e-6, origin_x=0, origin_y=0, sample="selftest_map")
-    p = run_worker(ScanWorker(HW, s, OUT))
+    p = run_worker(ScanWorker(HW, s, OUT, name="selftest_map_001"))
+    assert p == os.path.join(OUT, "selftest_map_001", "selftest_map_001.h5"), p
     d = load(p)
     assert np.isfinite(d.pc).all(), "missing pixels"
-    export_csv(d)
+    assert np.allclose(d.xs, np.sort(d.xs)) and len(d.xs) == 17, "x axis not restored"
+    out = export_csv(d)
+    first = open(os.path.join(out, "map0_+0V", "photocurrent_X.csv")).readline()
+    assert len(first.split(",")) == 17 and float(first.split(",")[0]) == float(
+        first.split(",")[0]), "CSV should be numbers only"
     save_all(d)
+    import h5py
+    with h5py.File(p, "r") as f:
+        assert "x_stage_um" not in f["map0_+0V"], "stage axes should not be saved"
+        pl = f["power_log"][()]
+        assert pl.ndim == 2 and pl.shape[1] == 2, "power_log: time, power"
 
 
 @check("map scan, fly mode")

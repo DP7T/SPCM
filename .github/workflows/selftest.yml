@@ -2,7 +2,7 @@ name: Self-test (simulation)
 
 on:
   push:
-    branches: [main]
+    branches: [main, v0.9]
   workflow_dispatch:
 
 permissions:
@@ -34,8 +34,9 @@ jobs:
         with:
           name: selftest-output
           path: |
-            selftest_out/*.png
-            selftest_out/*_csv/**
+            selftest_out/**/*.png
+            selftest_out/**/*.csv
+            selftest_out/**/*.txt
           retention-days: 14
       - name: Publish the results to the selftest-results branch (for review)
         if: always()

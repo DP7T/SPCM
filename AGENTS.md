@@ -33,6 +33,7 @@ the real hardware and report back with screenshots. Write in plain language for 
 | `tools/selftest.py` | tests everything in simulation (also the window, off-screen, with screenshots) |
 | `settings_dialog.py` | hardware settings window; writes `config.yaml` |
 | `numparse.py` | SI-prefix number parsing and the `SISpinBox` class |
+| `naming.py` | measurement names from a pattern, one folder per measurement |
 | `figures.py` | publication-style PNG (matplotlib Agg) |
 | `autofocus.py` | z sweep that maximizes the camera sharpness |
 | `config.default.yaml` | default settings. `config.yaml` is the user's copy, created on the first start. It is git-ignored and never overwritten. |
@@ -64,7 +65,7 @@ the real hardware and report back with screenshots. Write in plain language for 
   - Moves longer than 500 µm need confirmation.
   - Every Tango command and reply is logged to `spcm_stage.log`.
   - A move counts as done only when the stage is not moving **and** reports the target position.
-- **Laser power:** "Scan at this power" sets the SINE OUT once before each scan, iterating until the sample power is within tolerance. There is **no drift correction** during the scan (a bright gold area was mistaken for drift). Power is still logged per line.
+- **Laser power:** "Scan at this power" sets the SINE OUT once before each scan. `set_laser_power` moves the SINE OUT in **2 mV steps in one direction only** (never up and down, the user's request to protect the laser) until the sample power is within tolerance; it can be aborted (button, or Stop before a scan). There is **no drift correction** during the scan (a bright gold area was mistaken for drift). Power is still logged per line.
 
 **Point sweeps, line scans, camera**
 - Point sweeps run where the laser is now (never move the stage). Bias × power: bias is the **outer** loop. Plots: one curve per bias in the same figure with a bias legend, plus a 2-D bias–power map.
@@ -75,10 +76,12 @@ the real hardware and report back with screenshots. Write in plain language for 
 - Camera calibration matrix A (µm per pixel) is in `config.yaml` → `camera.calibration`. The laser is at the cyan cross. Pixel p ↔ stage `S_now + A·(p − cross)`.
 
 **Data**
+- **One folder per measurement**: `<save dir>/<name>/<name>.h5` + PNG(s) + `<name>_csv/`. Names come from a pattern (`naming.py`), default `{sample}_{date}_{size}_{step}_{power}_{n}`; experiment-note quantities can be fields.
+- **CSV matrices hold only numbers** (no axis row/column; axes in info.txt). The user imports them into Origin.
 - **HDF5 layout (v2):**
   - `/info`: settings, instruments and conversion, plus `/info/experiment`.
-  - One group per map, `/map1` or `/map1_+0.5V` for bias sweeps, holding plottable 2-D datasets `photocurrent_X/_Y/_R/_theta_deg` and `reflection_*` with the `x_um`/`y_um` axes, `raw/*`, and the stage coordinates.
-  - `/power_log`.
+  - One group per map, `/map1` or `/map1_+0.5V` for bias sweeps, holding plottable 2-D datasets `photocurrent_X/_Y/_R/_theta_deg` and `reflection_*` with the `x_um`/`y_um` axes and `raw/*`. No stage-coordinate datasets (the user opens the files in Origin; stage positions follow from `info/origin_stage_um`).
+  - `/power_log`: one N×2 dataset, time (s) and power on the sample (µW).
   - **No camera images in the h5.**
   - `scanner.load()` must keep reading old files.
 - **After each scan:** CSV export and the PNG figure are written automatically. Stop & discard deletes them.

@@ -87,19 +87,21 @@ def export_csv(d):
     if any(b is not None for b in s.biases):
         m = d.pc[:, 0, :, 0] * fac
         with open(os.path.join(out, "photocurrent_X_matrix.csv"), "w") as fh:
-            fh.write(f"# {signal_kind(s)} X [{unit}]; rows: bias (V), columns: "
-                     "distance along the line (µm)\n")
-            fh.write("bias\\distance," + ",".join(f"{x:.4f}" for x in dist) + "\n")
-            for ib, b in enumerate(s.biases):
-                fh.write(f"{b:g}," + ",".join("" if not np.isfinite(x) else f"{x:.6e}"
-                                             for x in m[ib]) + "\n")
+            for ib in range(len(s.biases)):          # numbers only (axes: info.txt)
+                fh.write(",".join("" if not np.isfinite(x) else f"{x:.6e}"
+                                  for x in m[ib]) + "\n")
     with open(os.path.join(out, "info.txt"), "w", encoding="utf-8") as fh:
         fh.write(f"Line scan\nSample: {s.sample}\nStarted: {d.started}\n"
                  f"Completed: {d.completed}\n")
         fh.write(f"From ({u[0]:.3f}, {v[0]:.3f}) to ({u[-1]:.3f}, {v[-1]:.3f}) µm "
                  f"(from the origin), {dist[-1]:.3f} µm long, {len(dist)} points, "
                  f"step {s.step * 1000:.1f} nm\n")
-        fh.write(f"Photocurrent conversion: {formula} [{unit}]\n\nExperiment:\n")
+        fh.write(f"Photocurrent conversion: {formula} [{unit}]\n")
+        if any(bb is not None for bb in s.biases):
+            fh.write(f"photocurrent_X_matrix.csv: numbers only, {signal_kind(s)} X in "
+                     f"{unit}; one row per bias ({', '.join(f'{bb:g}' for bb in s.biases)} V), "
+                     "one column per point along the line (distance in line.csv)\n")
+        fh.write("\nExperiment:\n")
         for k, val in (s.conditions or {}).items():
             fh.write(f"  {k}: {val}\n")
         fh.write(f"\nNotes:\n{s.notes}\n\nSettings:\n")

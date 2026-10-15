@@ -244,12 +244,9 @@ def export_csv(d):
     if s.kind == "bias_power":
         m = d.pc[..., 0] * fac
         with open(os.path.join(out, "photocurrent_X_matrix.csv"), "w") as fh:
-            fh.write(f"# {signal_kind(s)} X [{unit}]; rows: bias (V), columns: set power "
-                     "on sample (µW)\n")
-            fh.write("bias\\power," + ",".join(f"{p:g}" for p in d.powers) + "\n")
-            for ib, b in enumerate(d.biases):
-                fh.write(f"{b:g}," + ",".join("" if not np.isfinite(v) else f"{v:.6e}"
-                                             for v in m[ib]) + "\n")
+            for ib in range(len(d.biases)):          # numbers only (axes: info.txt)
+                fh.write(",".join("" if not np.isfinite(v) else f"{v:.6e}"
+                                  for v in m[ib]) + "\n")
     with open(os.path.join(out, "info.txt"), "w", encoding="utf-8") as fh:
         fh.write(f"{KINDS.get(s.kind, s.kind)}\nSample: {s.sample}\nStarted: {d.started}\n"
                  f"Completed: {d.completed}\n")
@@ -258,6 +255,10 @@ def export_csv(d):
         fh.write(f"Photocurrent conversion: {formula} [{unit}]\n")
         fh.write(f"Each point: mean of {s.n_avg} readings; *_std = their standard "
                  "deviation\n")
+        if s.kind == "bias_power":
+            fh.write(f"photocurrent_X_matrix.csv: numbers only, {signal_kind(s)} X in "
+                     f"{unit}; one row per bias ({', '.join(f'{b:g}' for b in d.biases)} V), "
+                     f"one column per set power ({', '.join(f'{p:g}' for p in d.powers)} µW)\n")
         for ib, r in enumerate(d.fits(0)):
             if r:
                 b = d.biases[ib]
@@ -413,16 +414,16 @@ class SweepWorker(QtCore.QObject):
     failed = QtCore.Signal(str)
     notify = QtCore.Signal(str, str)
 
-    def __init__(self, hw, settings, save_dir):
+    def __init__(self, hw, settings, save_dir, name=None):
         super().__init__()
         self.hw, self.s, self.save_dir = hw, settings, save_dir
         self.pm = next((a for a in hw.accessories if a.name == "powermeter"), None)
         self._stop = False
         self.data = SweepData(settings, hw.describe())
-        os.makedirs(save_dir, exist_ok=True)
-        stamp = time.strftime("%Y%m%d_%H%M%S")
-        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in settings.sample)
-        self.path = os.path.join(save_dir, f"{stamp}_{safe}_{settings.kind}_sweep.h5")
+        import naming
+        self.path = naming.measurement_path(save_dir, name or naming.default_name(
+            settings.sample, settings.kind.replace("_", "") + "sweep"))
+        self.data.path = self.path
 
     def stop(self):
         self._stop = True
@@ -511,6 +512,8 @@ class SweepWorker(QtCore.QObject):
                         res = set_laser_power(self.pm, li, p * 1e-6, 0,   # closest 2 mV step
                                               s.max_amp_V, status=self.status.emit,
                                               stop=lambda: self._stop)
+                        if res.get("aborted") or self._stop:
+                            break
                         if not res["ok"]:
                             self.notify.emit(f"{where}: {res['message']}", "warn")
                             if res["message"].startswith(("Laser power not reached",
