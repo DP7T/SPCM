@@ -784,7 +784,10 @@ class ScanWorker(QtCore.QObject):
                               status=self.status.emit, stop=lambda: self._stop)
         if res.get("aborted") or self._stop:
             return res
-        self.notify.emit(res["message"], "info" if res["ok"] else "warn")
+        if res["message"].startswith("Laser power already right"):
+            self.status.emit(res["message"])        # nothing changed: no pop-up
+        else:
+            self.notify.emit(res["message"], "info" if res["ok"] else "warn")
         if res["message"].startswith("Laser power not"):
             raise RuntimeError(res["message"])
         return res
