@@ -7,6 +7,8 @@
 - One **Draw ▾** menu (scan frame, line, resolution line) next to the tab names; "Scan this
   frame / line" only appear once something is drawn
 - Explanations behind small **?** buttons instead of grey text
+- Plus everything in 1.2.0 (camera calibration, line scans, bias / power series, point
+  sweeps) and 1.1.1 (quick I–V, resolution, fixes)
 
 ## 1.2.0 (pre-release)
 - **Camera calibration**: one button; then double-click the camera image to move the laser
