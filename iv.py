@@ -232,7 +232,12 @@ class IVWorker(QtCore.QObject):
                     d.stop_reason = "stopped by the user"
                     break
                 hw.bias.ramp_to(v)
-                time.sleep(s.wait_ms / 1000)
+                end = time.time() + s.wait_ms / 1000      # wait, but react to Stop
+                while time.time() < end and not self._stop:
+                    time.sleep(min(0.05, max(end - time.time(), 0)))
+                if self._stop:
+                    d.stop_reason = "stopped by the user"
+                    break
                 aux = self._read()
                 d.rows.append([v, sign * aux * s.sensitivity, cyc, time.time() - t0, aux])
                 self.point.emit()

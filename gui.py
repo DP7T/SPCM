@@ -3159,19 +3159,37 @@ class MainWindow(QtWidgets.QMainWindow):
         QtWidgets.QMessageBox.critical(self, "SPCM", msg)
 
     def closeEvent(self, ev):
-        if getattr(self, "af_thread", None) is not None:
-            self.af_worker.stop()
-            self.af_thread.quit()
-            self.af_thread.wait(10000)
-        if self.thread is not None:
+        running = [(getattr(self, w, None), getattr(self, t, None)) for w, t in
+                   (("worker", "thread"), ("af_worker", "af_thread"),
+                    ("cal_worker", "cal_thread"), ("ps_worker", "ps_thread"))]
+        running = [(w, t) for w, t in running if t is not None]
+        if running:
             if QtWidgets.QMessageBox.question(
-                    self, "SPCM", "A scan is running. Stop it and quit?") != \
+                    self, "SPCM", "A measurement is running. Stop it and quit?") != \
                     QtWidgets.QMessageBox.StandardButton.Yes:
                 ev.ignore()
                 return
-            self.worker.stop()
-            self.thread.quit()
-            self.thread.wait(5000)
+            # stop, then wait until it has really finished (bias back to 0, SINE OUT
+            # back, data saved) before the instruments are disconnected
+            self.statusBar().showMessage("Stopping safely (bias, laser power, saving)…")
+            QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
+            QtWidgets.QApplication.processEvents(
+                QtCore.QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+            try:
+                for w, t in running:
+                    if w is not None and hasattr(w, "stop"):
+                        w.stop()
+                    t.quit()
+                done = all(t.wait(180000) for w, t in running)
+            finally:
+                QtWidgets.QApplication.restoreOverrideCursor()
+            if not done:
+                QtWidgets.QMessageBox.warning(
+                    self, "SPCM", "The measurement has not finished stopping yet, so the "
+                    "program stays open (closing now would cut off the instruments in the "
+                    "middle of a command). Wait a moment and close again.")
+                ev.ignore()
+                return
         self.remember_experiment()
         for t in self.findChildren(QtCore.QTimer):
             t.stop()

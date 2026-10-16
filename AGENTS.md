@@ -67,7 +67,8 @@ the real hardware and report back with screenshots. Write in plain language for 
   - All scan moves go through `SafeStage`, which refuses targets outside the scan area plus a margin and verifies arrival.
   - Moves longer than 500 µm need confirmation.
   - Every Tango command and reply is logged to `spcm_stage.log`.
-  - A move counts as done only when the stage is not moving **and** reports the target position.
+  - A move counts as done only when the stage is not moving **and** reports the target position. If it sits off target for `settle_s` (3 s), the move is sent once more; then ≤ `accept_um` (1 µm) off is accepted and logged, more raises an error.
+  - Closing the window during a measurement stops it and waits for it to finish (bias, SINE OUT, saving) before closing the instruments.
 - **Laser power:** "Scan at this power" sets the SINE OUT once before each scan. `set_laser_power` moves the SINE OUT in **2 mV steps in one direction only** (never up and down, the user's request to protect the laser) until the sample power is within tolerance; it can be aborted (button, or Stop before a scan). There is **no drift correction** during the scan (a bright gold area was mistaken for drift). Power is still logged per line.
 
 **Series, line scans, point sweeps, camera**
@@ -90,6 +91,7 @@ the real hardware and report back with screenshots. Write in plain language for 
   - `/power_log`: one N×2 dataset, time (s) and power on the sample (µW).
   - **No camera images in the h5.**
   - `scanner.load()` must keep reading old files.
+- **Fly scans never invent data:** pixels without a reading stay NaN (line re-scanned once first; count in `map_info[...]['fly_empty_pixels']`). Stop halts the stage (`_halt_stage`).
 - **After each scan:** CSV export and the PNG figure are written automatically. Stop & discard deletes them.
 
 **GUI**

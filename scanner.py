@@ -766,6 +766,25 @@ class ScanWorker(QtCore.QObject):
     def stop(self):
         self._stop = True
 
+    def _sleep(self, t):
+        """sleep that ends early when Stop is pressed"""
+        end = time.time() + t
+        while not self._stop:
+            left = end - time.time()
+            if left <= 0:
+                break
+            time.sleep(min(0.05, left))
+
+    def _halt_stage(self, st):
+        """stop a fly-scan move and wait until the stage really stands still"""
+        st.stop()
+        t0 = time.time()
+        while st.is_moving():
+            if time.time() - t0 > 5:
+                raise RuntimeError("The stage did not stop after the stop command. "
+                                   "Check it before going on (details in spcm_stage.log).")
+            time.sleep(0.01)
+
     def _snapshot(self, ib, when):
         for acc in self.hw.accessories:
             if acc.name == "camera":          # camera pictures are not saved
@@ -808,7 +827,9 @@ class ScanWorker(QtCore.QObject):
             t1 = time.time()
             # first pixel of a line: the stage just came from far away and the
             # lock-in output still remembers the previous line -> wait twice
-            time.sleep(wait * (2 if ix == cols[0] else 1))
+            self._sleep(wait * (2 if ix == cols[0] else 1))
+            if self._stop:
+                break
             t2 = time.time()
             pc, rf = self._read_both()
             t3 = time.time()
@@ -873,6 +894,8 @@ class ScanWorker(QtCore.QObject):
                 t_loop.append(time.time() - t0)
                 ts.append(t0)
                 xs.append(x)
+            if self._stop:
+                self._halt_stage(st)
             st.set_velocity(vel0)
             if len(ts) >= 10:
                 break
@@ -936,29 +959,33 @@ class ScanWorker(QtCore.QObject):
                     target[ib, iy, ix] = sums[k][ix] / cnt[k][ix]
                     if k == 0:
                         self.pixel.emit(ib, iy, ix, d.pc[ib, iy, ix], d.refl[ib, iy, ix])
+        if self._stop:
+            self._halt_stage(st)            # don't let the line run on after Stop
         st.set_velocity(self._vel0)
         if len(pos) < 2:
-            return
+            return nx
         pos, tp, tr = np.array(pos), np.array(tp), np.array(tr)
         vfit = np.polyfit(tp, pos, 1)[0] if len(pos) > 3 else sgn * v
         x_read = pos + vfit * (tr - tp)       # stage position at each reading
         pcs, rfs = np.array(pcs), np.array(rfs)
-        # final, more precise pass with the measured speed (+ fill any gaps)
-        for arr, lag, target in ((pcs, delay[0], d.pc), (rfs, delay[1], d.refl)):
+        # final, more precise pass with the measured speed. A pixel that got no
+        # reading stays empty (NaN): nothing is filled in that was not measured.
+        for k, (arr, lag, target) in enumerate(((pcs, delay[0], d.pc),
+                                                (rfs, delay[1], d.refl))):
             xc = x_read - vfit * lag                          # undo the lock-in delay
             idx = np.digitize(xc, edges) - 1
+            ok = (idx >= 0) & (idx < nx)
+            n = np.bincount(idx[ok], minlength=nx).astype(float)
             out = np.full((nx, 4), np.nan)
-            for ix in range(nx):
-                sel = idx == ix
-                if sel.any():
-                    out[ix] = arr[sel].mean(axis=0)
-            good = ~np.isnan(out[:, 0])
-            if good.sum() >= 2:
-                for c in range(4):
-                    out[~good, c] = np.interp(xs[~good], xs[good], out[good, c])
+            for c in range(4):
+                tot = np.bincount(idx[ok], weights=arr[ok, c], minlength=nx)
+                out[n > 0, c] = tot[n > 0] / n[n > 0]
             target[ib, iy] = out
+            if k == 0:
+                empty = int((n == 0).sum())
         for ix in range(nx):
             self.pixel.emit(ib, iy, ix, d.pc[ib, iy, ix], d.refl[ib, iy, ix])
+        return empty
 
     def run(self):
         hw, s, d = self.hw, self.s, self.data
@@ -1066,7 +1093,18 @@ class ScanWorker(QtCore.QObject):
                         forward = not forward
                     tl = time.time()
                     if s.mode == "fly":
-                        self._fly_line(ib, iy, forward, wait)
+                        empty = self._fly_line(ib, iy, forward, wait)
+                        if empty and not self._stop:       # e.g. a slow reply: once more
+                            self.status.emit(f"Fly scan: {empty} pixel(s) got no reading - "
+                                             "scanning this line again")
+                            empty = self._fly_line(ib, iy, forward, wait)
+                        if empty and not self._stop:
+                            info = d.map_info[ib]
+                            info["fly_empty_pixels"] = info.get("fly_empty_pixels", 0) + empty
+                            self.notify.emit(
+                                f"Fly scan: {empty} pixel(s) of line {line + 1} got no reading "
+                                "and stay empty (nothing is filled in). Scan slower or use "
+                                "Step mode.", "warn")
                     else:
                         self._step_line(ib, iy, forward, wait)
                     done += nx
@@ -1143,6 +1181,9 @@ class ScanWorker(QtCore.QObject):
             self.failed.emit(traceback.format_exc())
         finally:
             hw.stage = raw_stage
+            if hasattr(self, "_pool"):
+                self._pool.shutdown(wait=True)
+                del self._pool
             if getattr(self, "_vel0", None) is not None:
                 try:
                     hw.stage.set_velocity(self._vel0)

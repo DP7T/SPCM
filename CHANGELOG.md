@@ -1,6 +1,19 @@
 # Changelog
 
-## 1.2.1 (in testing)
+## 1.2.2 (in testing)
+Safety and data fixes after a code review:
+- **Stage arrival**: a move that stops off target is sent once more; if the stage is still
+  more than 1 µm away, the measurement stops with a clear message (before, it was accepted
+  after 3 s and only the line-end check could catch it)
+- **Closing the window during a measurement** waits until it has really stopped (bias back
+  to 0, SINE OUT back, data saved) before disconnecting the instruments
+- **Fly scans**: Stop halts the stage at once; a pixel that got no reading is no longer
+  filled in from its neighbours: the line is scanned again once, and if pixels are still
+  missing they stay empty and you get a warning
+- Stop reacts at once during pixel waits (step scans) and I–V waits
+- Bias ramps remember the last voltage really sent, also when a step fails
+
+## 1.2.1 (pre-release)
 - **Calmer window**: left tabs Map / Point sweep / I–V / Instruments (Start runs the open
   tab); right tabs Maps / Camera / one **Plot** tab (line scans, point sweeps, I–V) /
   Experiment notes

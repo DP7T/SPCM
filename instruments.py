@@ -130,8 +130,14 @@ class TangoStage:
     def set_velocity(self, v):
         self.write(f"!vel x {v:.6g}")
 
+    # a stopped stage that is off target by less than this is accepted (encoder
+    # deadband); anything more is retried once and then stops the measurement
+    accept_um = 1.0
+    settle_s = 3.0         # how long a stopped stage may sit off target before acting
+
     def _wait(self, target=None, tol=0.25, target_z=None):
         t0 = time.time()
+        retried = False
         time.sleep(self.poll_interval)
         while True:
             if time.time() - t0 > self.move_timeout:
@@ -147,10 +153,29 @@ class TangoStage:
                     px, py = self.position()
                     if abs(px - target[0]) <= tol and abs(py - target[1]) <= tol:
                         return
-                if time.time() - t0 > 3.0 and not self.is_moving():
-                    # stopped but not on target (e.g. encoder deadband): accept,
-                    # the scan's own safety check catches anything large
-                    return
+                if time.time() - t0 > self.settle_s and not self.is_moving():
+                    # stopped for 3 s but not on target
+                    if target_z is not None:
+                        now, want = (self.position_z(),), (target_z,)
+                    else:
+                        now, want = self.position(), target
+                    err = max(abs(a - b) for a, b in zip(now, want))
+                    if not retried:                    # send the move once more
+                        self._log(f"# off target by {err:.3f} um after 3 s: sending again")
+                        retried, t0 = True, time.time()
+                        if target_z is not None:
+                            self.write(f"!moa z {target_z:.3f}")
+                        else:
+                            self.write(f"!moa {target[0]:.3f} {target[1]:.3f}")
+                    elif err <= self.accept_um:        # encoder deadband: accept, logged
+                        self._log(f"# accepted {err:.3f} um off target")
+                        return
+                    else:
+                        raise RuntimeError(
+                            "The stage stopped but did not reach its target: sent to "
+                            + ", ".join(f"{w:.2f}" for w in want) + " µm, it reports "
+                            + ", ".join(f"{n:.2f}" for n in now) + " µm. Is something "
+                            "blocking it, or is it at a limit? (details in spcm_stage.log)")
             time.sleep(self.poll_interval)
 
     def stop(self):
@@ -261,6 +286,7 @@ class _RampMixin:
         n = int(np.ceil(abs(target - self.value) / self.ramp_step))
         for v in np.linspace(self.value, target, n + 1)[1:]:
             self._set(v)
+            self.value = float(v)      # last value really sent (right even if a step fails)
             time.sleep(self.ramp_delay)
         self._set(target)
         self.value = target
@@ -480,7 +506,8 @@ class SimStage:
         self.vel_native = float(v)
 
     def stop(self):
-        pass
+        self._update()
+        self._mv = None
 
     def set_joystick(self, enabled):
         pass

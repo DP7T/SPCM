@@ -142,6 +142,90 @@ def _():
                      sample="selftest_fly")
     d = load(run_worker(ScanWorker(HW, s, OUT)))
     assert np.isfinite(d.pc[..., 0]).mean() > 0.9
+    print("      fly pixels without a reading (left empty, not filled in):",
+          int((~np.isfinite(d.pc[..., 0])).sum()))
+
+
+@check("stage: a move that stops off target is retried once, then refused")
+def _():
+    import instruments
+
+    class Fake(instruments.TangoStage):
+        def __init__(self, stuck_at):
+            self.poll_interval, self.move_timeout, self.settle_s = 0.001, 10, 0.05
+            self.has_z, self.stuck, self.sent = False, stuck_at, []
+
+        def write(self, cmd):
+            self.sent.append(cmd)
+
+        def _log(self, line):
+            pass
+
+        def is_moving(self):
+            return False
+
+        def position(self):
+            return self.stuck
+
+    st = Fake((10.4, 0.0))                  # 0.4 um off: deadband, accepted after a retry
+    st.move_to(10.0, 0.0)
+    assert len(st.sent) == 2, st.sent
+    st = Fake((15.0, 0.0))                  # 5 um off: blocked / at a limit -> error
+    try:
+        st.move_to(10.0, 0.0)
+    except RuntimeError as e:
+        assert "did not reach" in str(e)
+    else:
+        raise AssertionError("a stage 5 um off target was accepted")
+
+
+@check("bias ramp remembers the last value really sent when a step fails")
+def _():
+    import instruments
+
+    class Flaky(instruments._RampMixin):
+        ramp_delay = 0
+
+        def __init__(self):
+            self.n = 0
+
+        def _set(self, v):
+            self.n += 1
+            if self.n == 4:
+                raise IOError("simulated GPIB error")
+
+    b = Flaky()
+    try:
+        b.ramp_to(1.0)
+    except IOError:
+        pass
+    assert abs(b.value - 0.3) < 1e-9, b.value
+
+
+@check("fly scan: Stop halts the stage at once")
+def _():
+    from scanner import ScanSettings, ScanWorker
+    s = ScanSettings(x_center=-8, y_center=-6, x_size=16, y_size=20, step=1.0,
+                     serpentine=False, mode="fly", origin_x=0, origin_y=0,
+                     sample="selftest_fly_stop")
+    w = ScanWorker(HW, s, OUT)
+    halted = []
+    orig = w._halt_stage
+
+    def spy(stage):
+        orig(stage)
+        halted.append(stage.is_moving())
+    w._halt_stage = spy
+    seen = []
+
+    def press_stop(ib, iy, *_):             # press Stop during the 2nd line
+        if iy not in seen:
+            seen.append(iy)
+        if len(seen) == 2:
+            w.stop()
+    w.pixel.connect(press_stop)
+    run_worker(w)
+    assert halted and halted[0] is False, "stage was not halted after Stop"
 
 
 @check("series of maps over laser power (2 mV steps), SINE OUT back")
