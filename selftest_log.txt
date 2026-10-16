@@ -1,0 +1,33 @@
+ok    file names  (0.0 s)
+ok    laser power: monotonic 2 mV steps, abort  (7.6 s)
+ok    map scan, step mode (+ bias), save/load/CSV/figure  (11.2 s)
+      fly pixels without a reading (left empty, not filled in): 0
+ok    map scan, fly mode  (1.8 s)
+ok    bias series: laser power set again before every bias (maps and lines)  (10.4 s)
+      step: 1 range change(s), now 5 nV, max signal 52 % of full scale
+      fly: 1 range change(s), now 5 nV, max signal 45 % of full scale
+ok    auto range up: no saturation (map, fly map, point sweep)  (27.1 s)
+ok    stage: a move that stops off target is retried once, then refused  (0.2 s)
+ok    bias ramp remembers the last value really sent when a step fails  (0.0 s)
+ok    fly scan: Stop halts the stage at once  (0.6 s)
+ok    series of maps over laser power (2 mV steps), SINE OUT back  (17.8 s)
+ok    point sweeps: power, bias, bias x power  (99.2 s)
+ok    line scans: bias series and power series  (25.6 s)
+ok    camera calibration (simulated)  (2.6 s)
+ok    quick I-V (cycles, AUX IN), save/load/CSV/figure  (0.7 s)
+ok    resolution from an edge (fit, slanted line)  (0.7 s)
+      window 1600 x 950, smallest possible 1352 x 390
+         1352  QWidget  
+          898  QTabWidget  
+          894  QWidget  
+          894  QStackedWidget  
+          736  QWidget  
+      next map: sample_20261016_12x8um_1000nm_84.8uW_001
+      resolution on the simulated edge: FWHM 1160 nm
+C:\hostedtoolcache\windows\Python\3.12.10\x64\Lib\site-packages\pyvisa_py\tcpip.py:443: UserWarning: TCPIP:instr resource discovery is limited to the default interface.Install psutil: pip install psutil if you want to scan all interfaces.
+  warnings.warn(
+C:\hostedtoolcache\windows\Python\3.12.10\x64\Lib\site-packages\pyvisa_py\tcpip.py:122: UserWarning: TCPIP::hislip resource discovery requires the zeroconf package to be installed... try 'pip install zeroconf'
+  warnings.warn(
+ok    main window off-screen (screenshots)  (79.1 s)
+
+All tests passed. Output in D:\a\SPCM\SPCM\selftest_out

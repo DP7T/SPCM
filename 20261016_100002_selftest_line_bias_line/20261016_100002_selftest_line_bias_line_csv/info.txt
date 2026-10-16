@@ -1,0 +1,83 @@
+Line scan
+Sample: selftest_line_bias
+Started: 2026-10-16T10:00:02
+Completed: True
+From (-8.000, -3.000) to (8.000, 4.000) µm (from the origin), 17.464 µm long, 36 points, step 499.0 nm
+Photocurrent conversion: raw × √2 × 1 µA/V (SR570) = peak (amplitude) [A]
+
+line.csv: numbers only, one row per point. Columns:
+  1: distance (µm)
+  2: x (µm)
+  3: y (µm)
+  4: photocurrent X at -0.5 V (A)
+  5: photocurrent Y at -0.5 V (A)
+  6: photocurrent R at -0.5 V (A)
+  7: photocurrent theta at -0.5 V (deg)
+  8: reflection X at -0.5 V (V)
+  9: reflection Y at -0.5 V (V)
+  10: reflection R at -0.5 V (V)
+  11: reflection theta at -0.5 V (deg)
+  12: photocurrent X at 0 V (A)
+  13: photocurrent Y at 0 V (A)
+  14: photocurrent R at 0 V (A)
+  15: photocurrent theta at 0 V (deg)
+  16: reflection X at 0 V (V)
+  17: reflection Y at 0 V (V)
+  18: reflection R at 0 V (V)
+  19: reflection theta at 0 V (deg)
+  20: photocurrent X at 0.5 V (A)
+  21: photocurrent Y at 0.5 V (A)
+  22: photocurrent R at 0.5 V (A)
+  23: photocurrent theta at 0.5 V (deg)
+  24: reflection X at 0.5 V (V)
+  25: reflection Y at 0.5 V (V)
+  26: reflection R at 0.5 V (V)
+  27: reflection theta at 0.5 V (deg)
+
+photocurrent_X_matrix.csv: numbers only, Photocurrent X in A; one row per bias (-0.5, 0, 0.5 V), one column per point along the line
+
+Experiment:
+
+Notes:
+
+
+Settings:
+  x_center: -8
+  y_center: -3
+  origin: corner
+  origin_x: 0
+  origin_y: 0
+  flip_x: False
+  flip_y: False
+  angle_deg: 23.629377730656817
+  x_dir: 1
+  y_dir: 1
+  x_size: 17.46424919657298
+  y_size: 0.0
+  step: 0.4989785484735137
+  serpentine: False
+  settle_tc: 3.0
+  settle_auto: True
+  backlash_um: 1.0
+  extra_settle_ms: 0.0
+  auto_range: False
+  biases: [-0.5, 0, 0.5]
+  sample: selftest_line_bias
+  power_lock: False
+  target_power_uW: None
+  power_tol_pct: 1.0
+  mode: step
+  amp_mode: sr570
+  amp_value: 1e-06
+  signal_as: peak
+  lockin_unit: V
+  scan_type: line
+  outer: bias
+  outer_values: []
+
+Per line (lock-in settings read from the front panels; for a power series also the power reached):
+  line0: {"angle_deg": 23.629377730656817, "bias_V": -0.5, "laser_over_range_end": false, "laser_over_range_start": false, "laser_power_on_sample_uW_end": 86.7717350783144, "laser_power_on_sample_uW_start": 87.22609250494206, "laser_power_uW_end": 86.7717350783144, "laser_power_uW_start": 87.22609250494206, "laser_range_uW_end": 1000.0, "laser_range_uW_start": 1000.0, "laser_wavelength_nm": 532, "meter_to_sample_ratio": 1.0, "note": "line scan: images have 1 row; columns follow the line from start to end (distance_um)", "overload_lines": 0, "sens_pc": 1e-08, "sens_refl": 0.1, "tau_pc_s": 0.001, "tau_refl_s": 0.001, "wait_s": 0.007}
+  line1: {"angle_deg": 23.629377730656817, "bias_V": 0, "laser_over_range_end": false, "laser_over_range_start": false, "laser_power_on_sample_uW_end": 87.01031346208396, "laser_power_on_sample_uW_start": 87.5616087998768, "laser_power_uW_end": 87.01031346208396, "laser_power_uW_start": 87.5616087998768, "laser_range_uW_end": 1000.0, "laser_range_uW_start": 1000.0, "laser_wavelength_nm": 532, "meter_to_sample_ratio": 1.0, "note": "line scan: images have 1 row; columns follow the line from start to end (distance_um)", "overload_lines": 0, "sens_pc": 1e-08, "sens_refl": 0.1, "tau_pc_s": 0.001, "tau_refl_s": 0.001, "wait_s": 0.007}
+  line2: {"angle_deg": 23.629377730656817, "bias_V": 0.5, "laser_over_range_end": false, "laser_over_range_start": false, "laser_power_on_sample_uW_end": 87.48652435078466, "laser_power_on_sample_uW_start": 87.56811098300061, "laser_power_uW_end": 87.48652435078466, "laser_power_uW_start": 87.56811098300061, "laser_range_uW_end": 1000.0, "laser_range_uW_start": 1000.0, "laser_wavelength_nm": 532, "meter_to_sample_ratio": 1.0, "note": "line scan: images have 1 row; columns follow the line from start to end (distance_um)", "overload_lines": 0, "sens_pc": 1e-08, "sens_refl": 0.1, "tau_pc_s": 0.001, "tau_refl_s": 0.001, "wait_s": 0.007}
+
+Instruments: {"stage": "Simulated Tango", "lockin_photocurrent": "Simulated SR830 (photocurrent)", "lockin_reflection": "Simulated SR830 (reflection)", "bias": "Simulated bias", "accessories": {"powermeter": "Simulated PM100USB", "camera": "Simulated CS165CU"}, "simulated": true}
