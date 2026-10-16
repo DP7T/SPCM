@@ -1,6 +1,12 @@
 # Changelog
 
-## 1.2.2 (in testing)
+## 1.2.3 (in testing)
+- **First pixel of each line** (step scans): the stage now stops one step before the line,
+  waits there, and then steps onto the first pixel like onto any other pixel. Before, the
+  first pixel came right after the long move back from the end of the previous line and
+  could still carry some of it
+
+## 1.2.2 (pre-release)
 Safety and data fixes after a code review:
 - **Stage arrival**: a move that stops off target is sent once more; if the stage is still
   more than 1 µm away, the measurement stops with a clear message (before, it was accepted

@@ -815,19 +815,25 @@ class ScanWorker(QtCore.QObject):
     def _step_line(self, ib, iy, forward, wait):
         d, hw, nx = self.data, self.hw, len(self.data.xs)
         cols = range(nx) if forward else range(nx - 1, -1, -1)
-        if self.s.backlash_um > 0:     # take up backlash before the first pixel
-            first = d.xs[cols[0]]
+        # Lead-in: stop one step (at least the backlash distance) before the first
+        # pixel and wait there, then step onto the first pixel like onto any other.
+        # So the first pixel has the same history as every pixel: short move from
+        # the scan direction, stage at rest, lock-in settled on the neighbour - not
+        # a long fast move back from the far end of the previous line.
+        first = d.xs[cols[0]]
+        step = abs(d.xs[1] - d.xs[0]) if nx > 1 else 0.0
+        lead = max(step, self.s.backlash_um)
+        if lead > 0:
             hw.stage.move_to(*self.s.rotate_xy(
-                first - (1 if forward else -1) * self.s.backlash_um, d.ys[iy]), verify=True)
+                first - (1 if forward else -1) * lead, d.ys[iy]), verify=True)
+            self._sleep(2 * wait)
         for ix in cols:
             if self._stop:
                 break
             t0 = time.time()
             hw.stage.move_to(*self.s.rotate_xy(d.xs[ix], d.ys[iy]))
             t1 = time.time()
-            # first pixel of a line: the stage just came from far away and the
-            # lock-in output still remembers the previous line -> wait twice
-            self._sleep(wait * (2 if ix == cols[0] else 1))
+            self._sleep(wait * (2 if ix == cols[0] and lead <= 0 else 1))
             if self._stop:
                 break
             t2 = time.time()
