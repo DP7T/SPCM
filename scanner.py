@@ -775,6 +775,20 @@ class ScanWorker(QtCore.QObject):
                 break
             time.sleep(min(0.05, left))
 
+    def _set_power(self, s, li):
+        """Set the laser power on the sample at the scan's start position
+        (2 mV SINE OUT steps in one direction, within the tolerance)."""
+        self.hw.stage.move_to(*s.start_position())          # same spot every time
+        res = set_laser_power(self.pm, li, s.target_power_uW * 1e-6, s.power_tol_pct,
+                              self.lock_cfg.get("max_amplitude_V", 5.0),
+                              status=self.status.emit, stop=lambda: self._stop)
+        if res.get("aborted") or self._stop:
+            return res
+        self.notify.emit(res["message"], "info" if res["ok"] else "warn")
+        if res["message"].startswith("Laser power not"):
+            raise RuntimeError(res["message"])
+        return res
+
     def _halt_stage(self, st):
         """stop a fly-scan move and wait until the stage really stands still"""
         st.stop()
@@ -1030,18 +1044,14 @@ class ScanWorker(QtCore.QObject):
                     raise RuntimeError("A laser power series needs the power meter (PM100). "
                                        "Turn it on in Hardware → Settings.")
                 self._amp0 = li_laser.sine_amplitude()
-            if s.target_power_uW and self.pm is not None and outer != "power":
-                li = li_laser
-                hw.stage.move_to(*s.start_position())
-                res = set_laser_power(self.pm, li, s.target_power_uW * 1e-6,
-                                      s.power_tol_pct, self.lock_cfg.get("max_amplitude_V", 5.0),
-                                      status=self.status.emit, stop=lambda: self._stop)
+            # "Set the laser power before each scan": before the first map here, and
+            # again before every further map / line of a bias series (in the loop)
+            set_each = bool(s.target_power_uW and self.pm is not None and outer != "power")
+            if set_each:
+                res = self._set_power(s, li_laser)
                 d.power_lock = {"power_set": res}
                 if res.get("aborted") or self._stop:
                     raise InterruptedError(res["message"])
-                self.notify.emit(res["message"], "info" if res["ok"] else "warn")
-                if res["message"].startswith("Laser power not"):
-                    raise RuntimeError(res["message"])
             t_start = time.time()
             self._t = {"move": 0.0, "wait": 0.0, "read": 0.0, "n": 0}
             if s.mode == "fly" and (s.angle_deg or 0) != 0:
@@ -1057,6 +1067,14 @@ class ScanWorker(QtCore.QObject):
                 if outer == "bias" and val is not None:
                     self.status.emit(f"Ramping bias to {val:g} V")
                     hw.bias.ramp_to(val)
+                if set_each:
+                    if ib > 0:                      # the first one was set above
+                        res = self._set_power(s, li_laser)
+                        if res.get("aborted") or self._stop:
+                            break
+                    extra = {"laser_power_set_uW": s.target_power_uW,
+                             "laser_power_reached_uW": round(res["power_uW"], 4),
+                             "sine_amplitude_V": res["amplitude_V"]}
                 elif outer == "power" and val is not None:
                     hw.stage.move_to(*s.start_position())     # same spot every time
                     res = set_laser_power(self.pm, li_laser, val * 1e-6, 0,  # closest step

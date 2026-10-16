@@ -146,6 +146,37 @@ def _():
           int((~np.isfinite(d.pc[..., 0])).sum()))
 
 
+@check("bias series: laser power set again before every bias (maps and lines)")
+def _():
+    import scanner
+    from scanner import ScanSettings, ScanWorker
+    from linescan import line_settings
+    calls = []
+    orig = scanner.set_laser_power
+
+    def spy(*a, **k):
+        calls.append(HW.bias.value)
+        return orig(*a, **k)
+    scanner.set_laser_power = spy
+    try:
+        s = ScanSettings(x_center=-8, y_center=-6, x_size=3, y_size=2, step=1.0,
+                         serpentine=False, mode="step", origin_x=0, origin_y=0,
+                         biases=[-0.2, 0.0, 0.3], target_power_uW=60.0, power_tol_pct=2.0,
+                         sample="selftest_bias_power")
+        w = ScanWorker(HW, s, OUT)
+        run_worker(w)
+        assert len(calls) == 3, calls            # once per bias
+        assert all("laser_power_reached_uW" in m for m in w.data.map_info), w.data.map_info
+        calls.clear()
+        ls = line_settings((-8, -6), (-5, -6), 1.0, biases=[-0.2, 0.3],
+                           target_power_uW=60.0, power_tol_pct=2.0,
+                           sample="selftest_line_bias_power")
+        run_worker(ScanWorker(HW, ls, OUT))
+        assert len(calls) == 2, calls
+    finally:
+        scanner.set_laser_power = orig
+
+
 @check("stage: a move that stops off target is retried once, then refused")
 def _():
     import instruments

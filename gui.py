@@ -673,7 +673,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.pm_set.setToolTip(
                 "Before the scan starts, the lock-in SINE OUT amplitude is adjusted "
                 "until the power on the sample is within the tolerance of the target. "
-                "Nothing is changed during the scan; the power is still recorded.")
+                "In a bias series this is done again before every map or line, after the "
+                "bias has changed. Nothing is changed during a map or line; the power is "
+                "still recorded.")
             f.addRow(self.pm_set)
             self.pm_target = SISpinBox(1e-6, "µW")
             self.pm_target.setRange(0.001, 1e6)

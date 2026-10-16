@@ -5,6 +5,9 @@
   waits there, and then steps onto the first pixel like onto any other pixel. Before, the
   first pixel came right after the long move back from the end of the previous line and
   could still carry some of it
+- **Set the laser power before each scan** now also works in bias series (maps and
+  lines): the power is set again after every bias change, before that map or line; the
+  power reached is saved with each map
 
 ## 1.2.2 (pre-release)
 Safety and data fixes after a code review:
