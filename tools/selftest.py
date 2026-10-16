@@ -177,6 +177,44 @@ def _():
         scanner.set_laser_power = orig
 
 
+@check("auto range up: no saturation (map, fly map, point sweep)")
+def _():
+    import sweeps
+    from scanner import ScanSettings, ScanWorker
+    li = HW.lockin_pc
+    i0 = li.sens_index()
+    try:
+        base = dict(x_center=-8, y_center=-3, x_size=16, y_size=2, step=1.0,
+                    serpentine=False, origin_x=0, origin_y=0)
+        li.set_sens_index(0)                          # 2 nV: the signal saturates
+        w = ScanWorker(HW, ScanSettings(mode="step", sample="selftest_noauto", **base), OUT)
+        run_worker(w)
+        top = np.nanmax(w.data.pc[..., 2])
+        assert top <= 1.09 * 2e-9 + 1e-15, top          # simulator saturates like an SR830
+        for mode in ("step", "fly"):
+            li.set_sens_index(0)
+            w = ScanWorker(HW, ScanSettings(mode=mode, auto_range=True,
+                                            sample=f"selftest_auto_{mode}", **base), OUT)
+            run_worker(w)
+            ch = w.data.map_info[0].get("range_changes", [])
+            fs = li.full_scale()
+            top = np.nanmax(w.data.pc[..., 2])
+            print(f"      {mode}: {len(ch)} range change(s), now {fs * 1e9:g} nV, "
+                  f"max signal {top / fs * 100:.0f} % of full scale")
+            assert ch and top <= 0.8 * fs, (mode, ch, top, fs)
+        li.set_sens_index(0)
+        HW.stage.move_to(-5, 0.5)                     # a spot with signal
+        ss = sweeps.SweepSettings(kind="power", powers_uW=[30, 80], n_avg=2, x_stage=-5,
+                                  y_stage=0.5, u=5, v=0.5, auto_range=True,
+                                  sample="selftest_auto_sweep")
+        w = sweeps.SweepWorker(HW, ss, OUT)
+        run_worker(w)
+        assert w.data.info.get("range_changes"), w.data.info
+        assert np.nanmax(w.data.pc[..., 2]) <= 0.8 * li.full_scale()
+    finally:
+        li.set_sens_index(i0)
+
+
 @check("stage: a move that stops off target is retried once, then refused")
 def _():
     import instruments

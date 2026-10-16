@@ -608,7 +608,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ser_vals.editingFinished.connect(self._remember_series)
 
         left = inst_lay
-        g = QtWidgets.QGroupBox("Lock-ins (front panel, read only)")
+        g = QtWidgets.QGroupBox("Lock-ins (set on the front panel)")
         f = QtWidgets.QFormLayout(g)
         self.li_pc = QtWidgets.QLabel("-")
         self.li_r = QtWidgets.QLabel("-")
@@ -619,6 +619,17 @@ class MainWindow(QtWidgets.QMainWindow):
         rd = QtWidgets.QPushButton("Refresh")
         rd.clicked.connect(self.refresh_lockins)
         f.addRow(rd)
+        self.auto_range = QtWidgets.QCheckBox("Auto range up (photocurrent lock-in)")
+        self.auto_range.setChecked(bool(config.get("scan_defaults", {}).get("auto_range", False)))
+        self.auto_range.setToolTip(
+            "So nothing saturates while you're not watching: when the photocurrent "
+            "signal goes above 80 % of full scale, the lock-in is switched to the next "
+            "less sensitive range, and that pixel (fly scan: line; point sweep: point) is "
+            "measured again after settling. It only ever goes up, never back. Every "
+            "change pops up and is saved with the data. Maps, line scans and point sweeps.")
+        self.auto_range.toggled.connect(
+            lambda on: self._save_setting("scan_defaults", "auto_range", bool(on)))
+        f.addRow(self.auto_range)
         left.addWidget(g)
 
         self.pm = self.accessory("powermeter")
@@ -1728,6 +1739,7 @@ class MainWindow(QtWidgets.QMainWindow):
             serpentine=self.serp.isChecked(), settle_tc=self.settle.value(),
             settle_auto=self.settle_auto.isChecked(),
             extra_settle_ms=self.extra.value(), biases=biases,
+            auto_range=self.auto_range.isChecked(),
             sample=self.sample.text() or "sample", notes=self.exp_notes.toPlainText(),
             conditions=self.conditions(),
             power_lock=False,
@@ -2056,7 +2068,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 outer=base.outer, values=base.outer_values,
                 origin=self.origin_xy, flips=(self.sx < 0, self.sy < 0),
                 settle_tc=base.settle_tc, settle_auto=base.settle_auto,
-                backlash_um=base.backlash_um, extra_settle_ms=base.extra_settle_ms,
+                auto_range=base.auto_range, backlash_um=base.backlash_um, extra_settle_ms=base.extra_settle_ms,
                 sample=base.sample, notes=base.notes, conditions=base.conditions,
                 target_power_uW=base.target_power_uW, power_tol_pct=base.power_tol_pct,
                 amp_mode=base.amp_mode, amp_value=base.amp_value,
@@ -2306,7 +2318,7 @@ class MainWindow(QtWidgets.QMainWindow):
             restore_power=self.sw_restore.isChecked(),
             x_stage=X, y_stage=Y, u=u, v=v,
             settle_auto=self.settle_auto.isChecked(), settle_tc=self.settle.value(),
-            extra_settle_ms=self.extra.value(),
+            extra_settle_ms=self.extra.value(), auto_range=self.auto_range.isChecked(),
             amp_mode=self.amp_mode.currentData(), amp_value=self._amp_value(),
             lockin_unit=self._lockin_unit(), signal_as="peak",
             sample=self.sample.text() or "sample", notes=self.exp_notes.toPlainText(),

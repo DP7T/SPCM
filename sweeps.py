@@ -39,6 +39,7 @@ class SweepSettings:
     settle_auto: bool = True
     settle_tc: float = 3.0
     extra_settle_ms: float = 0.0
+    auto_range: bool = False        # photocurrent lock-in: next range up above 80 %
     amp_mode: str = "lockin"
     amp_value: float = 1.0
     signal_as: str = "peak"
@@ -458,6 +459,18 @@ class SweepWorker(QtCore.QObject):
         if not pcs:
             return False
         pcs, rfs, ps = np.array(pcs), np.array(rfs), np.array(ps)
+        if getattr(self.s, "auto_range", False) and not self._stop:
+            from scanner import range_up, _eng
+            self._fs, ch = range_up(hw.lockin_pc, np.abs(pcs[:, 2]).max(), self._fs)
+            if ch is not None:                 # above 80 %: range up, measure again
+                d.info.setdefault("range_changes", []).append(
+                    {"bias_index": ib, "power_index": ip, "from_V": ch[0], "to_V": ch[1]})
+                d.info["sens_pc"] = ch[1]
+                self.notify.emit(f"Auto range: photocurrent lock-in {_eng(ch[0], 'V')} → "
+                                 f"{_eng(ch[1], 'V')} (signal above 80 % of full scale)",
+                                 "info")
+                self._sleep(self._wait)
+                return self._measure(ib, ip, spacing)
         d.pc[ib, ip], d.refl[ib, ip] = pcs.mean(0), rfs.mean(0)
         d.pc_std[ib, ip] = pcs.std(0, ddof=1) if len(pcs) > 1 else 0.0
         d.refl_std[ib, ip] = rfs.std(0, ddof=1) if len(rfs) > 1 else 0.0
@@ -491,6 +504,9 @@ class SweepWorker(QtCore.QObject):
             except Exception:
                 poles = (2, 2)
             wait = pixel_wait(s, tau, poles)
+            self._wait = wait
+            if getattr(s, "auto_range", False):
+                self._fs = hw.lockin_pc.full_scale()
             spacing = max(tau)                   # readings ~1 τ apart
             d.info.update({"tau_pc_s": tau[0], "tau_refl_s": tau[1],
                            "sens_pc": hw.lockin_pc.sensitivity(),

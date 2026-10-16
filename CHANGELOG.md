@@ -5,6 +5,11 @@
   waits there, and then steps onto the first pixel like onto any other pixel. Before, the
   first pixel came right after the long move back from the end of the previous line and
   could still carry some of it
+- **Auto range up** (Instruments tab → Lock-ins, off by default): when the photocurrent
+  signal goes above 80 % of full scale, the photocurrent lock-in switches to the next less
+  sensitive range and measures that pixel again (fly scans: the line, point sweeps: the
+  point). Only ever up, never back down; each change pops up and is saved with the data.
+  For long measurements you're not watching
 - **Set the laser power before each scan** now also works in bias series (maps and
   lines): the power is set again after every bias change, before that map or line; the
   power reached is saved with each map

@@ -13,6 +13,7 @@ from dataclasses import dataclass, field, asdict
 import numpy as np
 
 from numparse import parse_number
+from instruments import SR830_SENS
 try:
     from pyqtgraph.Qt import QtCore
 except ImportError:  # headless use / testing without Qt
@@ -74,6 +75,7 @@ class ScanSettings:
     backlash_um: float = 1.0       # each line's first pixel is approached from
                                    # the scan direction (removes stage backlash)
     extra_settle_ms: float = 0.0
+    auto_range: bool = False       # photocurrent lock-in: next range up above AUTO_RANGE_FRAC
     biases: list = field(default_factory=lambda: [None])  # None = don't touch bias
     sample: str = "sample"
     notes: str = ""
@@ -586,6 +588,20 @@ class SafeStage:
 
 
 SINE_STEP_V = 0.002       # SR830 SINE OUT resolution
+AUTO_RANGE_FRAC = 0.8     # auto range: go up one range above 80 % of full scale
+
+
+def range_up(li, R, fs, frac=AUTO_RANGE_FRAC):
+    """Auto range (up only): if the reading R is above frac x full scale fs, switch
+    the lock-in to the next less sensitive range. -> (new fs, (old, new) sensitivity)
+    or (fs, None) if nothing changed (or it is already at 1 V)."""
+    if not np.isfinite(R) or abs(R) <= frac * fs:
+        return fs, None
+    i = li.sens_index()
+    if i >= len(SR830_SENS) - 1:
+        return fs, None
+    li.set_sens_index(i + 1)
+    return li.full_scale(), (SR830_SENS[i], SR830_SENS[i + 1])
 
 
 def set_laser_power(pm, lockin, target_W, tol_pct=1.0, max_amp=5.0,
@@ -775,6 +791,28 @@ class ScanWorker(QtCore.QObject):
                 break
             time.sleep(min(0.05, left))
 
+    def _check_range(self, ib, iy, ix, pc, wait):
+        """Auto range up (photocurrent lock-in): while the reading is above 80 % of
+        full scale, go one range up, let it settle and measure the pixel again."""
+        li = self.hw.lockin_pc
+        while getattr(self.s, "auto_range", False) and not self._stop:
+            self._fs, ch = range_up(li, pc[2], self._fs)
+            if ch is None:
+                return pc
+            self._log_range(ib, iy, ix, ch)
+            self._sleep(wait)
+            pc = li.read()
+        return pc
+
+    def _log_range(self, ib, iy, ix, ch):
+        info = self.data.map_info[ib]
+        info.setdefault("range_changes", []).append(
+            {"line": int(iy), "pixel": int(ix), "from_V": ch[0], "to_V": ch[1]})
+        info["sens_pc"] = ch[1]
+        self.notify.emit(f"Auto range: photocurrent lock-in {_eng(ch[0], 'V')} → "
+                         f"{_eng(ch[1], 'V')} (signal above "
+                         f"{AUTO_RANGE_FRAC * 100:.0f} % of full scale)", "info")
+
     def _set_power(self, s, li):
         """Set the laser power on the sample at the scan's start position
         (2 mV SINE OUT steps in one direction, within the tolerance)."""
@@ -855,6 +893,7 @@ class ScanWorker(QtCore.QObject):
                 break
             t2 = time.time()
             pc, rf = self._read_both()
+            pc = self._check_range(ib, iy, ix, pc, wait)
             t3 = time.time()
             self._t["move"] += t1 - t0
             self._t["wait"] += t2 - t1
@@ -1109,6 +1148,9 @@ class ScanWorker(QtCore.QObject):
                     self._poles = (2, 2)
                 wait = pixel_wait(s, self._tau, self._poles)
                 d.map_info[ib]["wait_s"] = wait
+                if getattr(s, "auto_range", False):
+                    self._fs = hw.lockin_pc.full_scale()
+                    d.map_info[ib]["auto_range"] = True
                 d.map_info[ib]["slope_poles"] = list(self._poles)
                 label = "" if val is None else f" @ {outer_text(s, val)}"
                 rows = range(ny) if s.y_dir > 0 else range(ny - 1, -1, -1)
@@ -1132,6 +1174,19 @@ class ScanWorker(QtCore.QObject):
                                 f"Fly scan: {empty} pixel(s) of line {line + 1} got no reading "
                                 "and stay empty (nothing is filled in). Scan slower or use "
                                 "Step mode.", "warn")
+                        # auto range up: the line went above 80 % -> range up, scan again
+                        for _ in range(len(SR830_SENS)):
+                            if self._stop or not getattr(s, "auto_range", False):
+                                break
+                            R = np.abs(d.pc[ib, iy, :, 2])
+                            Rmax = np.nanmax(R) if np.isfinite(R).any() else np.nan
+                            self._fs, ch = range_up(hw.lockin_pc, Rmax, self._fs)
+                            if ch is None:
+                                break
+                            self._log_range(ib, iy, -1, ch)
+                            self.status.emit("Auto range: scanning this line again")
+                            self._sleep(wait)
+                            self._fly_line(ib, iy, forward, wait)
                     else:
                         self._step_line(ib, iy, forward, wait)
                     done += nx

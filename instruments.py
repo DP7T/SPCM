@@ -221,14 +221,29 @@ class SR830:
             self.inst.write("OUTX 1")   # answer on GPIB
             self.inst.write("OVRM 1")   # keep front panel usable in GPIB remote
         self.idn = self.inst.query("*IDN?").strip()
-        # NOTE: this driver never changes sensitivity, time constant, phase,
-        # reference or filters -- those stay on the front panel. It only reads.
+        # NOTE: this driver never changes time constant, phase, reference or
+        # filters -- those stay on the front panel. The sensitivity is changed only
+        # by the optional "Auto range up" (photocurrent lock-in, off by default).
 
     def time_constant(self):
         return SR830_TAU[int(self.inst.query("OFLT?"))]
 
     def sensitivity(self):
         return SR830_SENS[int(self.inst.query("SENS?"))]
+
+    # -- only for the optional auto range (off by default) --
+    def sens_index(self):
+        return int(self.inst.query("SENS?"))
+
+    def set_sens_index(self, i):
+        """Change the sensitivity (used only by 'Auto range up', never otherwise)."""
+        self.inst.write(f"SENS {int(i)}")
+
+    def full_scale(self):
+        """Full scale in the unit SNAP? returns: V, or A for the current inputs
+        (I 1 MΩ: × 1e-6, I 100 MΩ: × 1e-8)."""
+        src = int(self.inst.query("ISRC?"))
+        return SR830_SENS[self.sens_index()] * {2: 1e-6, 3: 1e-8}.get(src, 1.0)
 
     def read(self):
         """Simultaneous snapshot -> np.array([X, Y, R, theta_deg])."""
@@ -525,8 +540,24 @@ class SimSR830:
     def time_constant(self):
         return self.tau
 
+    sens_i = None
+
+    def _si(self):
+        if self.sens_i is None:
+            self.sens_i = SR830_SENS.index(10e-9 if self.role == "photocurrent" else 100e-3)
+        return self.sens_i
+
     def sensitivity(self):
-        return 10e-9 if self.role == "photocurrent" else 100e-3
+        return SR830_SENS[self._si()]
+
+    def sens_index(self):
+        return self._si()
+
+    def set_sens_index(self, i):
+        self.sens_i = int(min(max(i, 0), len(SR830_SENS) - 1))
+
+    def full_scale(self):
+        return SR830_SENS[self._si()]
 
     def read(self):
         time.sleep(0.004)                       # GPIB transfer time
@@ -541,6 +572,10 @@ class SimSR830:
         ph = np.deg2rad(phase)
         X = sig * np.cos(ph) + noise * self.w.rng.normal()
         Y = sig * np.sin(ph) + noise * self.w.rng.normal()
+        fs = 1.09 * self.full_scale()                 # the outputs saturate like a real SR830
+        R = float(np.hypot(X, Y))
+        if R > fs:
+            X, Y = X * fs / R, Y * fs / R
         return np.array([X, Y, np.hypot(X, Y), np.rad2deg(np.arctan2(Y, X))])
 
     def overloaded(self):
