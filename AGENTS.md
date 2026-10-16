@@ -41,6 +41,7 @@ the real hardware and report back with screenshots. Write in plain language for 
 | `config.default.yaml` | default settings. `config.yaml` is the user's copy, created on the first start. It is git-ignored and never overwritten. |
 | `Install SPCM.bat`, `tools/setup.ps1` | installs Python and requirements, pip-installs the camera package, creates shortcuts |
 | `.github/workflows/build-windows.yml` | PyInstaller onedir build of `SPCM.exe`, attached to GitHub releases |
+| `.github/workflows/release-notes.yml`, `tools/release_notes.py` | names every release stable / testing / old and fills in its CHANGELOG section |
 | `.github/workflows/selftest.yml` | runs `tools/selftest.py` on Windows for every push to `main`; pushes the log, figures and screenshots to the `selftest-results` branch |
 
 ## Decisions already made (keep them)
@@ -116,6 +117,7 @@ It needs the libraries from `requirements.txt`; without PyQt5 it skips the windo
 
 - Bump `__version__` in `appinfo.py` and add a section to `CHANGELOG.md`.
 - Publishing a GitHub **release** (tag `vX.Y.Z`) runs the workflow, which attaches `SPCM-vX.Y.Z-windows.zip`.
+- Release names and descriptions are written automatically by `tools/release_notes.py` (workflow *Release notes*, also run after each build): "SPCM x.y.z - stable / testing / old test version", a first line saying which one to use, then that version's CHANGELOG section. So keep CHANGELOG sections short and written for the user.
 - Users update either by unzipping the release zip, or with Code → Download ZIP followed by `Install SPCM.bat`.
 - `config.yaml` and `data/` are never in the repository, so unzipping a new version over the old one is safe.
 

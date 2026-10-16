@@ -14,6 +14,8 @@ Only a few things are under software control. **Sensitivity, time constant, phas
 
 **Option B: SPCM.exe (no Python at all)**
 1. Open **Releases** (right side of the repository page) and download `SPCM-v…-windows.zip`.
+   Each release says in its name what it is: **stable** (use it for measurements),
+   **testing** (new features to try) or **old** (replaced, no need to download).
 2. Unzip it and start **SPCM.exe**. To update, unzip the new one over the same folder.
 
 The camera works with both options, as long as ThorCam is installed on the PC: SPCM finds the Thorlabs camera package inside the ThorCam installation by itself (the first start with the camera takes a few seconds longer while it unpacks it into `%LOCALAPPDATA%\SPCM\ThorlabsSDK`).

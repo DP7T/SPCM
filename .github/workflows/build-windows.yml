@@ -61,7 +61,10 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           files: ${{ env.ZIP }}
-          body: |
-            Windows build of SPCM ${{ github.ref_name }}.
-            Unzip, then start **SPCM.exe** (or *SPCM (simulation).bat* to try without hardware).
-            Updating: unzip over your old SPCM folder. Your settings (config.yaml) and data are kept. See CHANGELOG.md for what changed.
+
+      - name: Clear names and descriptions for all releases (stable / testing / old)
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python tools/release_notes.py
