@@ -1,6 +1,14 @@
 # Changelog
 
-## 1.2.0 (in testing)
+## 1.2.1 (in testing)
+- **Calmer window**: left tabs Map / Point sweep / I–V / Instruments (Start runs the open
+  tab); right tabs Maps / Camera / one **Plot** tab (line scans, point sweeps, I–V) /
+  Experiment notes
+- One **Draw ▾** menu (scan frame, line, resolution line) next to the tab names; "Scan this
+  frame / line" only appear once something is drawn
+- Explanations behind small **?** buttons instead of grey text
+
+## 1.2.0 (pre-release)
 - **Camera calibration**: one button; then double-click the camera image to move the laser
   there, and draw scan frames and lines on the live image (they stay on the sample when
   the stage moves)
