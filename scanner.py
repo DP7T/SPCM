@@ -13,6 +13,7 @@ from dataclasses import dataclass, field, asdict
 import numpy as np
 
 from numparse import parse_number
+from instruments import SR830_SENS
 try:
     from pyqtgraph.Qt import QtCore
 except ImportError:  # headless use / testing without Qt
@@ -74,6 +75,7 @@ class ScanSettings:
     backlash_um: float = 1.0       # each line's first pixel is approached from
                                    # the scan direction (removes stage backlash)
     extra_settle_ms: float = 0.0
+    auto_range: bool = False       # photocurrent lock-in: next range up above AUTO_RANGE_FRAC
     biases: list = field(default_factory=lambda: [None])  # None = don't touch bias
     sample: str = "sample"
     notes: str = ""
@@ -94,6 +96,19 @@ class ScanSettings:
     #   "square" x pi/sqrt(2) (on-off height of a square-wave/chopped signal)
     signal_as: str = "peak"
     lockin_unit: str = "V"          # "A" when the SR830 current input is used
+    scan_type: str = "map"          # "map", or "line" (one row along a drawn line)
+    # what changes from one map (or line) to the next:
+    #   "bias"   the biases list (V); [None] = a single map
+    #   "power"  outer_values = laser power on the sample (µW), each set with the
+    #            2 mV SINE OUT steps (one direction) closest to it; needs the meter
+    outer: str = "bias"
+    outer_values: list = field(default_factory=list)
+
+    def outer_list(self):
+        """Values of the series (one map or line each); [None] = just one."""
+        if getattr(self, "outer", "bias") == "power":
+            return list(self.outer_values) or [None]
+        return list(self.biases)
 
     def axes(self):
         nx = int(round(self.x_size / self.step)) + 1
@@ -118,6 +133,38 @@ class ScanSettings:
         c, s_ = np.cos(np.radians(a)), np.sin(np.radians(a))
         dx, dy = x - self.x_center, y - self.y_center
         return self.x_center + c * dx - s_ * dy, self.y_center + s_ * dx + c * dy
+
+
+OUTER = {"bias": ("Bias", "V"), "power": ("Laser power on sample", "µW")}
+
+
+def outer_name(s):
+    """-> (label, unit) of what changes between maps / lines."""
+    return OUTER.get(getattr(s, "outer", "bias"), OUTER["bias"])
+
+
+def outer_text(s, v):
+    """'0.5 V', '20 µW', or '' for a single map."""
+    return "" if v is None else f"{v:g} {outer_name(s)[1]}"
+
+
+def outer_tag(s, v):
+    """Suffix for group / folder names: '_+0.5V', '_20uW', '' for a single map."""
+    if v is None:
+        return ""
+    return f"_{v:g}uW" if getattr(s, "outer", "bias") == "power" else f"_{v:+g}V"
+
+
+def ramp_sine(lockin, target_V, stop=None, step_V=0.002, delay=0.01):
+    """Move the SINE OUT to target_V in 2 mV steps (one direction, no jumps),
+    e.g. to put the laser power back after a power series."""
+    stop = stop or (lambda: False)
+    a = lockin.sine_amplitude()
+    d = 1 if target_V > a else -1
+    while abs(target_V - a) > step_V / 2 and not stop():
+        a = lockin.set_sine_amplitude(a + d * min(step_V, abs(target_V - a)))
+        time.sleep(delay)
+    return a
 
 
 def _eng(v, unit):
@@ -174,23 +221,52 @@ def pc_scale(settings):
     return base, u, f"raw{mult} (lock-in only) = {label}"
 
 
-def parse_bias_list(text):
+def parse_list(text, scale=1.0):
     """'0, 0.5, 1'  or  '-1:1:0.5' (start:stop:step, inclusive)  or mixed.
-    Numbers may use SI prefixes: '-500m:500m:100m'."""
+    '1:100:*2' multiplies by 2 each time (1, 2, 4 ... 64, 100) - handy for
+    power sweeps on a log scale. Numbers may use SI prefixes ('-500m:500m:100m');
+    scale = the field's unit, as for parse_number."""
     out = []
     for part in text.replace(";", ",").split(","):
         part = part.strip()
         if not part:
             continue
         if ":" in part:
-            a, b, s = (parse_number(p) for p in part.split(":"))
+            pieces = part.split(":")
+            if len(pieces) != 3:
+                raise ValueError(f"Use start:stop:step, not '{part}'")
+            a, b = parse_number(pieces[0], scale), parse_number(pieces[1], scale)
+            st = pieces[2].strip()
+            if st[:1] in ("*", "x", "×"):
+                f = float(parse_number(st[1:]))
+                if f <= 1 or a <= 0 or b <= 0:
+                    raise ValueError("For '*factor' use a factor above 1 and "
+                                     "positive start and stop")
+                lo, hi = min(a, b), max(a, b)
+                vals = [lo]
+                while vals[-1] * f < hi * (1 - 1e-9):
+                    vals.append(vals[-1] * f)
+                if vals[-1] < hi * (1 - 1e-9):
+                    vals.append(hi)
+                out.extend((np.round(vals if a <= b else vals[::-1], 9)).tolist())
+                continue
+            s = parse_number(st, scale)
             if s == 0:
                 raise ValueError("Step can't be 0")
-            n = int(round(abs(b - a) / abs(s))) + 1
-            out.extend(np.round(np.linspace(a, b, n), 6).tolist())
+            s = abs(s) if b >= a else -abs(s)
+            n = int(np.floor((b - a) / s + 1e-9)) + 1
+            vals = a + s * np.arange(n)
+            if abs(vals[-1] - b) > 1e-9 * max(abs(s), 1e-30) * 1e3:
+                vals = np.append(vals, b)          # the stop value is always included
+            out.extend(np.round(vals, 9).tolist())
         else:
-            out.append(parse_number(part))
+            out.append(parse_number(part, scale))
     return out
+
+
+def parse_bias_list(text):
+    """Bias values in V (see parse_list)."""
+    return parse_list(text, 1.0)
 
 
 class ScanData:
@@ -198,7 +274,7 @@ class ScanData:
         self.settings = settings
         self.hw_info = hw_info
         self.xs, self.ys = settings.axes()
-        nb, ny, nx = len(settings.biases), len(self.ys), len(self.xs)
+        nb, ny, nx = len(settings.outer_list()), len(self.ys), len(self.xs)
         self.pc = np.full((nb, ny, nx, 4), np.nan)
         self.refl = np.full((nb, ny, nx, 4), np.nan)
         self.map_info = [{} for _ in range(nb)]
@@ -231,9 +307,13 @@ class ScanData:
         ux = (-1 if s.flip_x else 1) * (self.xs - ox) + 0.0
         vy = (-1 if s.flip_y else 1) * (self.ys - oy) + 0.0
         ix, iy = np.argsort(ux), np.argsort(vy)
+        line = getattr(s, "scan_type", "map") == "line"
+        if line:                         # a line keeps its order: start -> end
+            ix, iy = np.arange(len(self.xs)), np.arange(len(self.ys))
         view = np.ix_(iy, ix)
         with h5py.File(path, "w") as f:
             f.attrs["format"] = "SPCM v2 (one group per map)"
+            f.attrs["scan_type"] = "line" if line else "map"
             f.attrs["sample"] = s.sample
             f.attrs["signal"] = kind
             f.attrs["started"] = self.started
@@ -250,14 +330,26 @@ class ScanData:
             for k, v in s.conditions.items():
                 exp.attrs[k] = str(v)
             exp.attrs["notes"] = s.notes
-            for ib, b in enumerate(s.biases):
-                g = f.create_group(f"map{ib}" + ("" if b is None else f"_{b:+g}V"))
-                g.attrs["bias_V"] = np.nan if b is None else b
+            olabel, ounit = outer_name(s)
+            is_bias = getattr(s, "outer", "bias") == "bias"
+            for ib, b in enumerate(s.outer_list()):
+                g = f.create_group(f"map{ib}" + outer_tag(s, b))
+                g.attrs["bias_V"] = np.nan if (b is None or not is_bias) else b
+                if not is_bias:
+                    g.attrs["series"] = f"{olabel} ({ounit})"
+                    g.attrs["series_value"] = np.nan if b is None else b
                 for k, v in (self.map_info[ib] or {}).items():
                     if v is not None and not isinstance(v, (list, dict)):
                         g.attrs[k] = v
                 g["x_um"], g["y_um"] = ux[ix], vy[iy]
                 g.attrs["angle_deg"] = getattr(s, "angle_deg", 0.0)
+                if line:
+                    X, Y = s.rotate_xy(self.xs, np.full(len(self.xs), self.ys[0]))
+                    g["distance_um"] = self.xs - self.xs[0]
+                    g["line_x_um"] = (-1 if s.flip_x else 1) * (X - ox) + 0.0
+                    g["line_y_um"] = (-1 if s.flip_y else 1) * (Y - oy) + 0.0
+                    g.attrs["note"] = ("line scan: images have 1 row; columns follow "
+                                       "the line from start to end (distance_um)")
                 for c, ch in enumerate(CHANNELS):
                     nm = ch if c < 3 else "theta_deg"
                     d = g.create_dataset(f"photocurrent_{nm}",
@@ -293,7 +385,7 @@ class ScanData:
 def update_experiment(path, conditions, notes):
     """Rewrite the experiment notes of a saved file (e.g. typed during the scan)."""
     import h5py
-    with h5py.File(path, "a") as f:
+    with h5py.File(path, "r+") as f:      # never creates a new (empty) file
         base = f["info"] if "info" in f else f
         if "experiment" in base:
             del base["experiment"]
@@ -323,8 +415,8 @@ def export_csv(d):
     ux = (-1 if getattr(st, "flip_x", False) else 1) * (np.asarray(d.xs) - ox) + 0.0
     vy = (-1 if getattr(st, "flip_y", False) else 1) * (np.asarray(d.ys) - oy) + 0.0
     ix, iy = np.argsort(ux), np.argsort(vy)
-    for ib, b in enumerate(d.settings.biases):
-        sub = os.path.join(out, f"map{ib}" + ("" if b is None else f"_{b:+g}V"))
+    for ib, b in enumerate(d.settings.outer_list()):
+        sub = os.path.join(out, f"map{ib}" + outer_tag(d.settings, b))
         os.makedirs(sub, exist_ok=True)
         for name, arr, f_, u in (("photocurrent", d.pc, fac, unit),
                                  ("reflection", d.refl, 1.0, "V")):
@@ -496,6 +588,20 @@ class SafeStage:
 
 
 SINE_STEP_V = 0.002       # SR830 SINE OUT resolution
+AUTO_RANGE_FRAC = 0.8     # auto range: go up one range above 80 % of full scale
+
+
+def range_up(li, R, fs, frac=AUTO_RANGE_FRAC):
+    """Auto range (up only): if the reading R is above frac x full scale fs, switch
+    the lock-in to the next less sensitive range. -> (new fs, (old, new) sensitivity)
+    or (fs, None) if nothing changed (or it is already at 1 V)."""
+    if not np.isfinite(R) or abs(R) <= frac * fs:
+        return fs, None
+    i = li.sens_index()
+    if i >= len(SR830_SENS) - 1:
+        return fs, None
+    li.set_sens_index(i + 1)
+    return li.full_scale(), (SR830_SENS[i], SR830_SENS[i + 1])
 
 
 def set_laser_power(pm, lockin, target_W, tol_pct=1.0, max_amp=5.0,
@@ -676,6 +782,64 @@ class ScanWorker(QtCore.QObject):
     def stop(self):
         self._stop = True
 
+    def _sleep(self, t):
+        """sleep that ends early when Stop is pressed"""
+        end = time.time() + t
+        while not self._stop:
+            left = end - time.time()
+            if left <= 0:
+                break
+            time.sleep(min(0.05, left))
+
+    def _check_range(self, ib, iy, ix, pc, wait):
+        """Auto range up (photocurrent lock-in): while the reading is above 80 % of
+        full scale, go one range up, let it settle and measure the pixel again."""
+        li = self.hw.lockin_pc
+        while getattr(self.s, "auto_range", False) and not self._stop:
+            self._fs, ch = range_up(li, pc[2], self._fs)
+            if ch is None:
+                return pc
+            self._log_range(ib, iy, ix, ch)
+            self._sleep(wait)
+            pc = li.read()
+        return pc
+
+    def _log_range(self, ib, iy, ix, ch):
+        info = self.data.map_info[ib]
+        info.setdefault("range_changes", []).append(
+            {"line": int(iy), "pixel": int(ix), "from_V": ch[0], "to_V": ch[1]})
+        info["sens_pc"] = ch[1]
+        self.notify.emit(f"Auto range: photocurrent lock-in {_eng(ch[0], 'V')} → "
+                         f"{_eng(ch[1], 'V')} (signal above "
+                         f"{AUTO_RANGE_FRAC * 100:.0f} % of full scale)", "info")
+
+    def _set_power(self, s, li):
+        """Set the laser power on the sample at the scan's start position
+        (2 mV SINE OUT steps in one direction, within the tolerance)."""
+        self.hw.stage.move_to(*s.start_position())          # same spot every time
+        res = set_laser_power(self.pm, li, s.target_power_uW * 1e-6, s.power_tol_pct,
+                              self.lock_cfg.get("max_amplitude_V", 5.0),
+                              status=self.status.emit, stop=lambda: self._stop)
+        if res.get("aborted") or self._stop:
+            return res
+        if res["message"].startswith("Laser power already right"):
+            self.status.emit(res["message"])        # nothing changed: no pop-up
+        else:
+            self.notify.emit(res["message"], "info" if res["ok"] else "warn")
+        if res["message"].startswith("Laser power not"):
+            raise RuntimeError(res["message"])
+        return res
+
+    def _halt_stage(self, st):
+        """stop a fly-scan move and wait until the stage really stands still"""
+        st.stop()
+        t0 = time.time()
+        while st.is_moving():
+            if time.time() - t0 > 5:
+                raise RuntimeError("The stage did not stop after the stop command. "
+                                   "Check it before going on (details in spcm_stage.log).")
+            time.sleep(0.01)
+
     def _snapshot(self, ib, when):
         for acc in self.hw.accessories:
             if acc.name == "camera":          # camera pictures are not saved
@@ -706,21 +870,30 @@ class ScanWorker(QtCore.QObject):
     def _step_line(self, ib, iy, forward, wait):
         d, hw, nx = self.data, self.hw, len(self.data.xs)
         cols = range(nx) if forward else range(nx - 1, -1, -1)
-        if self.s.backlash_um > 0:     # take up backlash before the first pixel
-            first = d.xs[cols[0]]
+        # Lead-in: stop one step (at least the backlash distance) before the first
+        # pixel and wait there, then step onto the first pixel like onto any other.
+        # So the first pixel has the same history as every pixel: short move from
+        # the scan direction, stage at rest, lock-in settled on the neighbour - not
+        # a long fast move back from the far end of the previous line.
+        first = d.xs[cols[0]]
+        step = abs(d.xs[1] - d.xs[0]) if nx > 1 else 0.0
+        lead = max(step, self.s.backlash_um)
+        if lead > 0:
             hw.stage.move_to(*self.s.rotate_xy(
-                first - (1 if forward else -1) * self.s.backlash_um, d.ys[iy]), verify=True)
+                first - (1 if forward else -1) * lead, d.ys[iy]), verify=True)
+            self._sleep(2 * wait)
         for ix in cols:
             if self._stop:
                 break
             t0 = time.time()
             hw.stage.move_to(*self.s.rotate_xy(d.xs[ix], d.ys[iy]))
             t1 = time.time()
-            # first pixel of a line: the stage just came from far away and the
-            # lock-in output still remembers the previous line -> wait twice
-            time.sleep(wait * (2 if ix == cols[0] else 1))
+            self._sleep(wait * (2 if ix == cols[0] and lead <= 0 else 1))
+            if self._stop:
+                break
             t2 = time.time()
             pc, rf = self._read_both()
+            pc = self._check_range(ib, iy, ix, pc, wait)
             t3 = time.time()
             self._t["move"] += t1 - t0
             self._t["wait"] += t2 - t1
@@ -783,6 +956,8 @@ class ScanWorker(QtCore.QObject):
                 t_loop.append(time.time() - t0)
                 ts.append(t0)
                 xs.append(x)
+            if self._stop:
+                self._halt_stage(st)
             st.set_velocity(vel0)
             if len(ts) >= 10:
                 break
@@ -846,29 +1021,33 @@ class ScanWorker(QtCore.QObject):
                     target[ib, iy, ix] = sums[k][ix] / cnt[k][ix]
                     if k == 0:
                         self.pixel.emit(ib, iy, ix, d.pc[ib, iy, ix], d.refl[ib, iy, ix])
+        if self._stop:
+            self._halt_stage(st)            # don't let the line run on after Stop
         st.set_velocity(self._vel0)
         if len(pos) < 2:
-            return
+            return nx
         pos, tp, tr = np.array(pos), np.array(tp), np.array(tr)
         vfit = np.polyfit(tp, pos, 1)[0] if len(pos) > 3 else sgn * v
         x_read = pos + vfit * (tr - tp)       # stage position at each reading
         pcs, rfs = np.array(pcs), np.array(rfs)
-        # final, more precise pass with the measured speed (+ fill any gaps)
-        for arr, lag, target in ((pcs, delay[0], d.pc), (rfs, delay[1], d.refl)):
+        # final, more precise pass with the measured speed. A pixel that got no
+        # reading stays empty (NaN): nothing is filled in that was not measured.
+        for k, (arr, lag, target) in enumerate(((pcs, delay[0], d.pc),
+                                                (rfs, delay[1], d.refl))):
             xc = x_read - vfit * lag                          # undo the lock-in delay
             idx = np.digitize(xc, edges) - 1
+            ok = (idx >= 0) & (idx < nx)
+            n = np.bincount(idx[ok], minlength=nx).astype(float)
             out = np.full((nx, 4), np.nan)
-            for ix in range(nx):
-                sel = idx == ix
-                if sel.any():
-                    out[ix] = arr[sel].mean(axis=0)
-            good = ~np.isnan(out[:, 0])
-            if good.sum() >= 2:
-                for c in range(4):
-                    out[~good, c] = np.interp(xs[~good], xs[good], out[good, c])
+            for c in range(4):
+                tot = np.bincount(idx[ok], weights=arr[ok, c], minlength=nx)
+                out[n > 0, c] = tot[n > 0] / n[n > 0]
             target[ib, iy] = out
+            if k == 0:
+                empty = int((n == 0).sum())
         for ix in range(nx):
             self.pixel.emit(ib, iy, ix, d.pc[ib, iy, ix], d.refl[ib, iy, ix])
+        return empty
 
     def run(self):
         hw, s, d = self.hw, self.s, self.data
@@ -898,19 +1077,23 @@ class ScanWorker(QtCore.QObject):
                                 **{k: v for k, v in self.lock_cfg.items() if k != "enabled"}}
                 self.status.emit(f"Power lock on: target {target * 1e6:.2f} µW, "
                                  f"sine {amp0:.3f} V")
-            if s.target_power_uW and self.pm is not None:
-                li = (hw.lockin_refl if self.lock_cfg.get("lockin") == "reflection"
-                      else hw.lockin_pc)
-                hw.stage.move_to(*s.start_position())
-                res = set_laser_power(self.pm, li, s.target_power_uW * 1e-6,
-                                      s.power_tol_pct, self.lock_cfg.get("max_amplitude_V", 5.0),
-                                      status=self.status.emit, stop=lambda: self._stop)
+            outer = getattr(s, "outer", "bias")
+            li_laser = (hw.lockin_refl if self.lock_cfg.get("lockin") == "reflection"
+                        else hw.lockin_pc)
+            self._amp0 = None
+            if outer == "power":
+                if self.pm is None:
+                    raise RuntimeError("A laser power series needs the power meter (PM100). "
+                                       "Turn it on in Hardware → Settings.")
+                self._amp0 = li_laser.sine_amplitude()
+            # "Set the laser power before each scan": before the first map here, and
+            # again before every further map / line of a bias series (in the loop)
+            set_each = bool(s.target_power_uW and self.pm is not None and outer != "power")
+            if set_each:
+                res = self._set_power(s, li_laser)
                 d.power_lock = {"power_set": res}
                 if res.get("aborted") or self._stop:
                     raise InterruptedError(res["message"])
-                self.notify.emit(res["message"], "info" if res["ok"] else "warn")
-                if res["message"].startswith("Laser power not"):
-                    raise RuntimeError(res["message"])
             t_start = time.time()
             self._t = {"move": 0.0, "wait": 0.0, "read": 0.0, "n": 0}
             if s.mode == "fly" and (s.angle_deg or 0) != 0:
@@ -918,16 +1101,41 @@ class ScanWorker(QtCore.QObject):
                                    "Use Step mode, or set the angle to 0.")
             if s.mode == "fly":
                 self._fly_setup()
-            for ib, bias in enumerate(s.biases):
+            for ib, val in enumerate(s.outer_list()):
                 if self._stop:
                     break
-                if bias is not None:
-                    self.status.emit(f"Ramping bias to {bias:g} V")
-                    hw.bias.ramp_to(bias)
+                bias = val if outer == "bias" else None
+                extra = {}
+                if outer == "bias" and val is not None:
+                    self.status.emit(f"Ramping bias to {val:g} V")
+                    hw.bias.ramp_to(val)
+                if set_each:
+                    if ib > 0:                      # the first one was set above
+                        res = self._set_power(s, li_laser)
+                        if res.get("aborted") or self._stop:
+                            break
+                    extra = {"laser_power_set_uW": s.target_power_uW,
+                             "laser_power_reached_uW": round(res["power_uW"], 4),
+                             "sine_amplitude_V": res["amplitude_V"]}
+                elif outer == "power" and val is not None:
+                    hw.stage.move_to(*s.start_position())     # same spot every time
+                    res = set_laser_power(self.pm, li_laser, val * 1e-6, 0,  # closest step
+                                          self.lock_cfg.get("max_amplitude_V", 5.0),
+                                          status=self.status.emit, stop=lambda: self._stop)
+                    if res.get("aborted") or self._stop:
+                        break
+                    if res["message"].startswith("Laser power not set"):
+                        raise RuntimeError(res["message"])
+                    if not res["ok"]:
+                        self.notify.emit(f"{val:g} µW: {res['message']}", "warn")
+                    extra = {"laser_power_set_uW": val,
+                             "laser_power_reached_uW": round(res["power_uW"], 4),
+                             "sine_amplitude_V": res["amplitude_V"]}
                 # read front-panel settings for this map
                 tau_pc = hw.lockin_pc.time_constant()
                 tau_r = hw.lockin_refl.time_constant()
                 d.map_info[ib] = {
+                    **extra,
                     "bias_V": bias, "tau_pc_s": tau_pc, "tau_refl_s": tau_r,
                     "sens_pc": hw.lockin_pc.sensitivity(),
                     "sens_refl": hw.lockin_refl.sensitivity(),
@@ -940,8 +1148,11 @@ class ScanWorker(QtCore.QObject):
                     self._poles = (2, 2)
                 wait = pixel_wait(s, self._tau, self._poles)
                 d.map_info[ib]["wait_s"] = wait
+                if getattr(s, "auto_range", False):
+                    self._fs = hw.lockin_pc.full_scale()
+                    d.map_info[ib]["auto_range"] = True
                 d.map_info[ib]["slope_poles"] = list(self._poles)
-                label = "" if bias is None else f" @ {bias:g} V"
+                label = "" if val is None else f" @ {outer_text(s, val)}"
                 rows = range(ny) if s.y_dir > 0 else range(ny - 1, -1, -1)
                 for line, iy in enumerate(rows):
                     if self._stop:
@@ -951,7 +1162,31 @@ class ScanWorker(QtCore.QObject):
                         forward = not forward
                     tl = time.time()
                     if s.mode == "fly":
-                        self._fly_line(ib, iy, forward, wait)
+                        empty = self._fly_line(ib, iy, forward, wait)
+                        if empty and not self._stop:       # e.g. a slow reply: once more
+                            self.status.emit(f"Fly scan: {empty} pixel(s) got no reading - "
+                                             "scanning this line again")
+                            empty = self._fly_line(ib, iy, forward, wait)
+                        if empty and not self._stop:
+                            info = d.map_info[ib]
+                            info["fly_empty_pixels"] = info.get("fly_empty_pixels", 0) + empty
+                            self.notify.emit(
+                                f"Fly scan: {empty} pixel(s) of line {line + 1} got no reading "
+                                "and stay empty (nothing is filled in). Scan slower or use "
+                                "Step mode.", "warn")
+                        # auto range up: the line went above 80 % -> range up, scan again
+                        for _ in range(len(SR830_SENS)):
+                            if self._stop or not getattr(s, "auto_range", False):
+                                break
+                            R = np.abs(d.pc[ib, iy, :, 2])
+                            Rmax = np.nanmax(R) if np.isfinite(R).any() else np.nan
+                            self._fs, ch = range_up(hw.lockin_pc, Rmax, self._fs)
+                            if ch is None:
+                                break
+                            self._log_range(ib, iy, -1, ch)
+                            self.status.emit("Auto range: scanning this line again")
+                            self._sleep(wait)
+                            self._fly_line(ib, iy, forward, wait)
                     else:
                         self._step_line(ib, iy, forward, wait)
                     done += nx
@@ -990,6 +1225,10 @@ class ScanWorker(QtCore.QObject):
             d.completed = not self._stop
             if any(b is not None for b in s.biases):
                 hw.bias.ramp_to(0.0)
+            if getattr(self, "_amp0", None) is not None:
+                self.status.emit(f"Laser power back: SINE OUT to {self._amp0:.3f} V "
+                                 "in 2 mV steps")
+                ramp_sine(li_laser, self._amp0)
             hw.stage.move_to(*s.start_position())   # back to where you started
             d.save(self.path)
             self.finished.emit(self.path)
@@ -1013,12 +1252,20 @@ class ScanWorker(QtCore.QObject):
             except Exception:
                 pass
             try:
+                if getattr(self, "_amp0", None) is not None:
+                    ramp_sine(li_laser, self._amp0)
+            except Exception:
+                pass
+            try:
                 d.save(self.path)
             except Exception:
                 pass
             self.failed.emit(traceback.format_exc())
         finally:
             hw.stage = raw_stage
+            if hasattr(self, "_pool"):
+                self._pool.shutdown(wait=True)
+                del self._pool
             if getattr(self, "_vel0", None) is not None:
                 try:
                     hw.stage.set_velocity(self._vel0)

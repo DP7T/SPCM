@@ -104,10 +104,12 @@ class TangoStage:
     def position_z(self):
         return self._numbers(self.query("?pos"), 3, "?pos")[2]
 
-    def move_z(self, z):
-        """Absolute focus move (µm) of the z axis only."""
+    def move_z(self, z, tol_um=0.25):
+        """Absolute focus move (µm) of the z axis only. Like move_to, it returns
+        only when z has stopped AND reports the target (the status alone can say
+        'not moving' before the move has started)."""
         self.write(f"!moa z {z:.3f}")
-        self._wait()
+        self._wait(target_z=z, tol=tol_um)
 
     def move_to(self, x, y, tol_um=0.25):
         """Absolute move; returns only when the stage reports it is no longer
@@ -128,23 +130,52 @@ class TangoStage:
     def set_velocity(self, v):
         self.write(f"!vel x {v:.6g}")
 
-    def _wait(self, target=None, tol=0.25):
+    # a stopped stage that is off target by less than this is accepted (encoder
+    # deadband); anything more is retried once and then stops the measurement
+    accept_um = 1.0
+    settle_s = 3.0         # how long a stopped stage may sit off target before acting
+
+    def _wait(self, target=None, tol=0.25, target_z=None):
         t0 = time.time()
+        retried = False
         time.sleep(self.poll_interval)
         while True:
             if time.time() - t0 > self.move_timeout:
                 self.stop()
                 raise TimeoutError("Tango: move timed out")
             if not self.is_moving():
-                if target is None:
+                if target is None and target_z is None:
                     return
-                px, py = self.position()
-                if abs(px - target[0]) <= tol and abs(py - target[1]) <= tol:
-                    return
-                if time.time() - t0 > 3.0 and not self.is_moving():
-                    # stopped but not on target (e.g. encoder deadband): accept,
-                    # the scan's own safety check catches anything large
-                    return
+                if target_z is not None:
+                    if abs(self.position_z() - target_z) <= tol:
+                        return
+                else:
+                    px, py = self.position()
+                    if abs(px - target[0]) <= tol and abs(py - target[1]) <= tol:
+                        return
+                if time.time() - t0 > self.settle_s and not self.is_moving():
+                    # stopped for 3 s but not on target
+                    if target_z is not None:
+                        now, want = (self.position_z(),), (target_z,)
+                    else:
+                        now, want = self.position(), target
+                    err = max(abs(a - b) for a, b in zip(now, want))
+                    if not retried:                    # send the move once more
+                        self._log(f"# off target by {err:.3f} um after 3 s: sending again")
+                        retried, t0 = True, time.time()
+                        if target_z is not None:
+                            self.write(f"!moa z {target_z:.3f}")
+                        else:
+                            self.write(f"!moa {target[0]:.3f} {target[1]:.3f}")
+                    elif err <= self.accept_um:        # encoder deadband: accept, logged
+                        self._log(f"# accepted {err:.3f} um off target")
+                        return
+                    else:
+                        raise RuntimeError(
+                            "The stage stopped but did not reach its target: sent to "
+                            + ", ".join(f"{w:.2f}" for w in want) + " µm, it reports "
+                            + ", ".join(f"{n:.2f}" for n in now) + " µm. Is something "
+                            "blocking it, or is it at a limit? (details in spcm_stage.log)")
             time.sleep(self.poll_interval)
 
     def stop(self):
@@ -190,14 +221,29 @@ class SR830:
             self.inst.write("OUTX 1")   # answer on GPIB
             self.inst.write("OVRM 1")   # keep front panel usable in GPIB remote
         self.idn = self.inst.query("*IDN?").strip()
-        # NOTE: this driver never changes sensitivity, time constant, phase,
-        # reference or filters -- those stay on the front panel. It only reads.
+        # NOTE: this driver never changes time constant, phase, reference or
+        # filters -- those stay on the front panel. The sensitivity is changed only
+        # by the optional "Auto range up" (photocurrent lock-in, off by default).
 
     def time_constant(self):
         return SR830_TAU[int(self.inst.query("OFLT?"))]
 
     def sensitivity(self):
         return SR830_SENS[int(self.inst.query("SENS?"))]
+
+    # -- only for the optional auto range (off by default) --
+    def sens_index(self):
+        return int(self.inst.query("SENS?"))
+
+    def set_sens_index(self, i):
+        """Change the sensitivity (used only by 'Auto range up', never otherwise)."""
+        self.inst.write(f"SENS {int(i)}")
+
+    def full_scale(self):
+        """Full scale in the unit SNAP? returns: V, or A for the current inputs
+        (I 1 MΩ: × 1e-6, I 100 MΩ: × 1e-8)."""
+        src = int(self.inst.query("ISRC?"))
+        return SR830_SENS[self.sens_index()] * {2: 1e-6, 3: 1e-8}.get(src, 1.0)
 
     def read(self):
         """Simultaneous snapshot -> np.array([X, Y, R, theta_deg])."""
@@ -219,6 +265,11 @@ class SR830:
 
     def set_aux_out(self, channel, volts):
         self.inst.write(f"AUXV {int(channel)},{volts:.4f}")
+
+    def aux_in(self, channel=1):
+        """Voltage on the rear-panel AUX IN 1-4 (±10.5 V), e.g. the SR570
+        output for a DC I-V."""
+        return float(self.inst.query(f"OAUX? {int(channel)}"))
 
     # reference SINE OUT amplitude (Vrms, 0.004-5.000 V in 2 mV steps).
     # Only used by the power lock during a scan.
@@ -250,6 +301,7 @@ class _RampMixin:
         n = int(np.ceil(abs(target - self.value) / self.ramp_step))
         for v in np.linspace(self.value, target, n + 1)[1:]:
             self._set(v)
+            self.value = float(v)      # last value really sent (right even if a step fails)
             time.sleep(self.ramp_delay)
         self._set(target)
         self.value = target
@@ -371,6 +423,12 @@ class SimWorld:
         drift = 1 - 0.15 * (1 - np.exp(-t / 90)) + 0.02 * np.sin(t / 7)
         return 100e-6 * self.laser_amp * drift
 
+    def dc_current(self):
+        """DC current through the simulated device at the present bias (A):
+        a slightly non-linear resistor plus the photocurrent of the laser."""
+        v = self.bias
+        return 2e-7 * v + 5e-8 * np.sinh(2.5 * v) + 2e-9 * self.power_factor()
+
     def power_factor(self):
         return self.laser_power() / 100e-6
 
@@ -463,7 +521,8 @@ class SimStage:
         self.vel_native = float(v)
 
     def stop(self):
-        pass
+        self._update()
+        self._mv = None
 
     def set_joystick(self, enabled):
         pass
@@ -481,8 +540,24 @@ class SimSR830:
     def time_constant(self):
         return self.tau
 
+    sens_i = None
+
+    def _si(self):
+        if self.sens_i is None:
+            self.sens_i = SR830_SENS.index(10e-9 if self.role == "photocurrent" else 100e-3)
+        return self.sens_i
+
     def sensitivity(self):
-        return 10e-9 if self.role == "photocurrent" else 100e-3
+        return SR830_SENS[self._si()]
+
+    def sens_index(self):
+        return self._si()
+
+    def set_sens_index(self, i):
+        self.sens_i = int(min(max(i, 0), len(SR830_SENS) - 1))
+
+    def full_scale(self):
+        return SR830_SENS[self._si()]
 
     def read(self):
         time.sleep(0.004)                       # GPIB transfer time
@@ -491,10 +566,16 @@ class SimSR830:
             sig, noise, phase = self.w.photocurrent(x, y), 3e-11, 12.0
         else:
             sig, noise, phase = 0.05 * self.w.reflection(x, y), 2e-4, -3.0
-        sig *= self.w.power_factor()
+        pf = max(self.w.power_factor(), 0.0)
+        # photocurrent grows a bit slower than linearly with power (α ≈ 0.85)
+        sig *= pf ** 0.85 if self.role == "photocurrent" else pf
         ph = np.deg2rad(phase)
         X = sig * np.cos(ph) + noise * self.w.rng.normal()
         Y = sig * np.sin(ph) + noise * self.w.rng.normal()
+        fs = 1.09 * self.full_scale()                 # the outputs saturate like a real SR830
+        R = float(np.hypot(X, Y))
+        if R > fs:
+            X, Y = X * fs / R, Y * fs / R
         return np.array([X, Y, np.hypot(X, Y), np.rad2deg(np.arctan2(Y, X))])
 
     def overloaded(self):
@@ -503,6 +584,11 @@ class SimSR830:
     def set_aux_out(self, channel, volts):
         if self.role == "photocurrent":
             self.w.bias = volts
+
+    def aux_in(self, channel=1):
+        """Simulated SR570 output (DC, 1 µA/V) for the quick I-V."""
+        time.sleep(0.003)
+        return self.w.dc_current() / 1e-6 + 2e-4 * self.w.rng.normal()
 
     def input_unit(self):
         return "V"

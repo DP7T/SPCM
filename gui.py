@@ -84,7 +84,7 @@ class MapPanel(QtWidgets.QWidget):
         grp = QtWidgets.QButtonGroup(self)
         for key, label, tip in (("auto", "Auto", "Fit the colour scale to the data"),
                                 ("sym", "Symmetric ±", "Centre the scale on zero: −max … +max"),
-                                ("manual", "Manual", "Use the min/max typed on the right")):
+                                ("manual", "Manual", "Use the Min/Max typed below")):
             b = QtWidgets.QRadioButton(label)
             b.setToolTip(tip)
             grp.addButton(b)
@@ -92,7 +92,10 @@ class MapPanel(QtWidgets.QWidget):
             row.addWidget(b)
             self.mode_btns[key] = b
         self.mode_btns["auto"].setChecked(True)
-        row.addSpacing(10)
+        row.addStretch(1)
+        lay.addLayout(row)
+        row = QtWidgets.QHBoxLayout()          # second line: limits + line cut
+        row.setContentsMargins(6, 0, 6, 4)
         self.min_e, self.max_e = QtWidgets.QLineEdit(), QtWidgets.QLineEdit()
         for lab, e in (("Min", self.min_e), ("Max", self.max_e)):
             e.setFixedWidth(95)
@@ -342,6 +345,34 @@ class AutofocusWorker(QtCore.QObject):
                 pass
 
 
+class CalibrationWorker(QtCore.QObject):
+    status = QtCore.Signal(str)
+    done = QtCore.Signal(object)      # Calibration, or error text
+
+    def __init__(self, stage, cam, step_um, laser_px):
+        super().__init__()
+        self.args = (stage, cam, step_um, laser_px)
+        self._stop = False
+
+    def stop(self):
+        self._stop = True
+
+    def run(self):
+        from calibration import calibrate
+        stage, cam, step, laser = self.args
+        try:
+            stage.set_joystick(False)
+            self.done.emit(calibrate(stage, cam, step, laser, status=self.status.emit,
+                                     stop=lambda: self._stop))
+        except Exception as e:
+            self.done.emit(str(e))
+        finally:
+            try:
+                stage.set_joystick(True)
+            except Exception:
+                pass
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, hw, config, config_path=None, restart=None):
         super().__init__()
@@ -378,12 +409,14 @@ class MainWindow(QtWidgets.QMainWindow):
             sa = QtWidgets.QScrollArea()
             sa.setWidgetResizable(True)
             sa.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-            sa.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            sa.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
             sa.setWidget(inner)
             self.side_tabs.addTab(sa, title)
             return lay
 
-        scan_lay = page("Scan")
+        scan_lay = page("Map")
+        sweep_lay = page("Point sweep")
+        iv_lay = page("I–V")
         inst_lay = page("Instruments")
         left = scan_lay
 
@@ -550,28 +583,53 @@ class MainWindow(QtWidgets.QMainWindow):
         left.addWidget(g)
 
         left = scan_lay
-        g = QtWidgets.QGroupBox("Bias")
+        g = QtWidgets.QGroupBox("Series: one map (or line) per value")
         f = QtWidgets.QFormLayout(g)
-        self.bias_on = QtWidgets.QCheckBox("Sweep bias (one map per value)")
-        self.bias_txt = QtWidgets.QLineEdit(d.get("biases", "0"))
-        self.bias_txt.setToolTip("e.g. 0, 0.5, 1   or   -1:1:250m  (start:stop:step)\n"
-                                 "Numbers like 100m, 1e-1 and 0.1 all work.")
+        ser = config.get("series", {}) or {}
+        self.ser_kind = QtWidgets.QComboBox()
+        self.ser_kind.addItem("Nothing (one map)", "none")
+        self.ser_kind.addItem("Bias (V)", "bias")
+        self.ser_kind.addItem("Laser power on sample (µW)", "power")
+        self.ser_kind.setCurrentIndex(max(self.ser_kind.findData(ser.get("kind", "none")), 0))
+        self.ser_vals = QtWidgets.QLineEdit()
+        self._ser_texts = {"bias": str(ser.get("bias", d.get("biases", "0"))),
+                           "power": str(ser.get("power", "1:100:*2"))}
+        self._ser_shown = None
         self.has_bias = not isinstance(hw.bias, instruments.NoBias)
-        f.addRow(self.bias_on)
-        f.addRow("Values (V)", self.bias_txt)
-        f.addRow("Source", QtWidgets.QLabel(hw.bias.idn))
+        f.addRow("Change", self.ser_kind)
+        f.addRow("Values", self.ser_vals)
+        self.ser_note = QtWidgets.QLabel()
+        self.ser_note.setWordWrap(True)
+        self.ser_note.setStyleSheet("color:gray")
+        f.addRow(self.ser_note)
+        f.addRow("Bias source", QtWidgets.QLabel(hw.bias.idn))
         left.addWidget(g)
+        self.ser_kind.currentIndexChanged.connect(self._ser_changed)
+        self.ser_vals.editingFinished.connect(self._remember_series)
 
         left = inst_lay
-        g = QtWidgets.QGroupBox("Lock-ins (front panel, read only)")
+        g = QtWidgets.QGroupBox("Lock-ins (set on the front panel)")
         f = QtWidgets.QFormLayout(g)
         self.li_pc = QtWidgets.QLabel("-")
         self.li_r = QtWidgets.QLabel("-")
+        for lab_ in (self.li_pc, self.li_r):
+            lab_.setWordWrap(True)
         f.addRow("Photocurrent", self.li_pc)
         f.addRow("Reflection", self.li_r)
         rd = QtWidgets.QPushButton("Refresh")
         rd.clicked.connect(self.refresh_lockins)
         f.addRow(rd)
+        self.auto_range = QtWidgets.QCheckBox("Auto range up (photocurrent lock-in)")
+        self.auto_range.setChecked(bool(config.get("scan_defaults", {}).get("auto_range", False)))
+        self.auto_range.setToolTip(
+            "So nothing saturates while you're not watching: when the photocurrent "
+            "signal goes above 80 % of full scale, the lock-in is switched to the next "
+            "less sensitive range, and that pixel (fly scan: line; point sweep: point) is "
+            "measured again after settling. It only ever goes up, never back. Every "
+            "change pops up and is saved with the data. Maps, line scans and point sweeps.")
+        self.auto_range.toggled.connect(
+            lambda on: self._save_setting("scan_defaults", "auto_range", bool(on)))
+        f.addRow(self.auto_range)
         left.addWidget(g)
 
         self.pm = self.accessory("powermeter")
@@ -626,7 +684,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.pm_set.setToolTip(
                 "Before the scan starts, the lock-in SINE OUT amplitude is adjusted "
                 "until the power on the sample is within the tolerance of the target. "
-                "Nothing is changed during the scan; the power is still recorded.")
+                "In a bias series this is done again before every map or line, after the "
+                "bias has changed. Nothing is changed during a map or line; the power is "
+                "still recorded.")
             f.addRow(self.pm_set)
             self.pm_target = SISpinBox(1e-6, "µW")
             self.pm_target.setRange(0.001, 1e6)
@@ -659,6 +719,12 @@ class MainWindow(QtWidgets.QMainWindow):
             self.pm_poller.start()
 
         inst_lay.addStretch(1)
+        self.build_iv_tab(iv_lay)
+        self.build_sweep_tab(sweep_lay)
+        for cb in side.findChildren(QtWidgets.QComboBox):     # narrow drop-downs
+            cb.setSizeAdjustPolicy(
+                QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            cb.setMinimumContentsLength(10)
         left = scan_lay
         g = QtWidgets.QGroupBox("Save")
         f = QtWidgets.QFormLayout(g)
@@ -744,7 +810,11 @@ class MainWindow(QtWidgets.QMainWindow):
         auto = QtWidgets.QPushButton("Auto colour")
         auto.clicked.connect(self.reset_levels)
         bar.addWidget(auto)
-        bar.addSpacing(20)
+        bar.addStretch(1)
+        right.addLayout(bar)
+        self.map_tools = QtWidgets.QWidget()    # second row: tools drawn on the maps
+        bar = QtWidgets.QHBoxLayout(self.map_tools)
+        bar.setContentsMargins(0, 0, 0, 0)
         self.rois, self._roi_sync = [], False
         self.frame_btn = QtWidgets.QPushButton("Draw scan frame")
         self.frame_btn.setCheckable(True)
@@ -756,10 +826,55 @@ class MainWindow(QtWidgets.QMainWindow):
         self.use_frame_btn.clicked.connect(self.use_frame)
         bar.addWidget(self.frame_btn)
         bar.addWidget(self.use_frame_btn)
-        bar.addStretch(1)
-        right.addLayout(bar)
+        bar.addSpacing(12)
+        self.line_rois = []
+        self.line_btn = QtWidgets.QPushButton("Draw line")
+        self.line_btn.setCheckable(True)
+        self.line_btn.setToolTip("Show a line on the maps. Drag its two ends where you "
+                                 "want, then press 'Scan this line'. Step, timing, series "
+                                 "(bias / laser power) and laser power come from the Scan "
+                                 "and Instruments tabs.")
+        self.line_btn.toggled.connect(self.toggle_line)
+        self.use_line_btn = QtWidgets.QPushButton("Scan this line")
+        self.use_line_btn.setEnabled(False)
+        self.use_line_btn.clicked.connect(self.scan_line)
+        bar.addWidget(self.line_btn)
+        bar.addWidget(self.use_line_btn)
+        bar.addSpacing(12)
+        self.res_rois, self.res_dialog = [], None
+        self.res_btn = QtWidgets.QPushButton("Measure resolution")
+        self.res_btn.setCheckable(True)
+        self.res_btn.setToolTip(
+            "Draws a line on the reflection map. Put it across a sharp edge (e.g. a gold "
+            "electrode); the reflection profile is fitted and the spot size (FWHM) shown. "
+            "Drag the side handle to average over a wider band.")
+        self.res_btn.toggled.connect(self.toggle_resolution)
+        bar.addWidget(self.res_btn)
+        # the three toggle buttons stay as state holders, the user sees one menu
+        for b_ in (self.frame_btn, self.line_btn, self.res_btn):
+            b_.setVisible(False)
+        self.draw_btn = self._draw_menu([
+            ("Scan frame (move, resize, rotate)", self.frame_btn),
+            ("Line to scan along", self.line_btn),
+            ("Resolution line (reflection map)", self.res_btn)])
+        bar.insertWidget(0, self.draw_btn)
+        self.use_frame_btn.setVisible(False)
+        self.use_line_btn.setVisible(False)
+        bar.addSpacing(8)
+        bar.addWidget(self._help_btn(
+            "Maps",
+            "• Double-click a map to move the laser there (when idle).\n"
+            "• Drag the dashed line for a line cut; drag the colour bar to set the scale.\n"
+            "• Draw ▸ Scan frame: move, resize and rotate the frame over the area you want, "
+            "then press 'Scan this frame' (fills in the Map tab).\n"
+            "• Draw ▸ Line to scan along: drag its two ends, then 'Scan this line'. Step, "
+            "timing and series come from the Map tab.\n"
+            "• Draw ▸ Resolution line: put it across a sharp edge on the reflection map; the "
+            "spot size (FWHM) is fitted."))
 
         self.tabs = QtWidgets.QTabWidget()
+        # the drawing tools sit next to the tab names, so nothing jumps when they hide
+        self.tabs.setCornerWidget(self.map_tools, QtCore.Qt.TopRightCorner)
         right.addWidget(self.tabs, 1)
         maps_w = QtWidgets.QWidget()
         maps = QtWidgets.QHBoxLayout(maps_w)
@@ -771,26 +886,49 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs.addTab(maps_w, "Maps")
         if self.cam is not None:
             self.tabs.addTab(self.build_camera_tab(), "Camera")
+        self.plot_stack = QtWidgets.QStackedWidget()
+        ph = QtWidgets.QLabel("Line scans, point sweeps and I–V curves appear here.")
+        ph.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        ph.setStyleSheet("color:gray")
+        self.plot_stack.addWidget(ph)
+        self.tabs.addTab(self.plot_stack, "Plot")
         self.tabs.addTab(self.build_experiment_tab(), "Experiment notes")
+        # a GraphicsLayoutWidget (like the maps) so it follows the light/dark theme
+        self.iv_glw = pg.GraphicsLayoutWidget()
+        self.iv_plot = self.iv_glw.addPlot()
+        self.iv_plot.setLabel("bottom", "Bias", units="V")
+        self.iv_plot.setLabel("left", "Current", units="A")
+        self.iv_plot.showGrid(x=True, y=True, alpha=0.25)
+        self.iv_legend = self.iv_plot.addLegend(offset=(10, 10))
+        self.iv_data = None
+        self.plot_stack.addWidget(self.iv_glw)
+        from sweep_view import SweepView, LineView
+        self.line_view = LineView()
+        self.plot_stack.addWidget(self.line_view)
+        self.line_data = None
+        self.sweep_view = SweepView()
+        self.plot_stack.addWidget(self.sweep_view)
+        self.sweep_data = None
+        self.side_tabs.currentChanged.connect(self._side_tab_changed)
+        # the map drawing tools only show with the maps
+        self.tabs.currentChanged.connect(
+            lambda *_: self.map_tools.setVisible(self.tabs.currentIndex() == 0))
         for p in (self.pc_panel, self.r_panel):
             p.clicked.connect(self.goto)
-        hint = QtWidgets.QLabel("Double-click a map to move the laser there (when idle). "
-                                "Drag the dashed line for a line cut. "
-                                "Drag the colour bar to set the scale.")
-        hint.setStyleSheet("color:gray")
-        right.addWidget(hint)
 
         for w in (self.ch_pc, self.ch_r, self.map_sel):
             w.currentIndexChanged.connect(self.redraw)
+        for w in (self.ch_r, self.map_sel):
+            w.currentIndexChanged.connect(lambda *_: self.update_resolution())
         for w in (self.xs_, self.ys_, self.step, self.settle, self.extra):
             w.valueChanged.connect(self.update_eta)
-        self.bias_on.toggled.connect(self.update_eta)
+        self.ser_kind.currentIndexChanged.connect(self.update_eta)
         self.settle_auto.toggled.connect(self.update_eta)
         self.serp.toggled.connect(self.update_eta)
         self.mode.currentIndexChanged.connect(self.update_eta)
         self.mode.currentIndexChanged.connect(
             lambda *_: self._save_setting("scan_defaults", "mode", self.mode.currentData()))
-        self.bias_txt.editingFinished.connect(self.update_eta)
+        self.ser_vals.editingFinished.connect(self.update_eta)
 
         self.statusBar().showMessage("Ready" + sim)
         if hw.warnings:
@@ -802,7 +940,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._amp_changed()
         for w in (self.xs_, self.ys_, self.step):
             w.valueChanged.connect(self._name_changed)
-        self.bias_on.toggled.connect(self._name_changed)
+        self.ser_kind.currentIndexChanged.connect(self._name_changed)
+        self.ser_vals.editingFinished.connect(self._name_changed)
         if self.pm is not None:
             self.pm_set.toggled.connect(self._name_changed)
             self.pm_target.valueChanged.connect(self._name_changed)
@@ -892,7 +1031,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._save_setting("camera", "spot_y", float(p.y()))
 
     def read_z(self):
-        if self.af_thread is not None or self.thread is not None:
+        if self._busy():
             return
         try:
             self.z_lab.setText(f"{self.hw.stage.position_z():.3f}")
@@ -943,12 +1082,24 @@ class MainWindow(QtWidgets.QMainWindow):
         self.statusBar().showMessage(result["message"])
         self.last_autofocus = result
 
+    def _busy(self):
+        """True while a scan, I-V, autofocus or power setting runs in the background:
+        then only that thread talks to the stage and the lock-ins (two threads asking
+        at once can mix up the replies)."""
+        return (self.thread is not None or getattr(self, "af_thread", None) is not None
+                or getattr(self, "cal_thread", None) is not None
+                or getattr(self, "ps_thread", None) is not None)
+
     def _lockin_unit(self):
-        """'A' if the photocurrent SR830 uses its current input, else 'V'."""
+        """'A' if the photocurrent SR830 uses its current input, else 'V'.
+        While busy, the value read before is used."""
+        if self._busy():
+            return getattr(self, "_lockin_unit_now", "V")
         try:
-            return self.hw.lockin_pc.input_unit()
+            self._lockin_unit_now = self.hw.lockin_pc.input_unit()
         except Exception:
-            return "V"
+            self._lockin_unit_now = "V"
+        return self._lockin_unit_now
 
     def _amp_value(self):
         m = self.amp_mode.currentData()
@@ -962,15 +1113,8 @@ class MainWindow(QtWidgets.QMainWindow):
         m = self.amp_mode.currentData()
         self.amp_sens.setEnabled(m == "sr570")
         self.amp_gain.setEnabled(m == "voltage")
-        # bias only exists with the SR570 current preamp
-        ok = m == "sr570" and self.has_bias
-        self.bias_on.setEnabled(ok)
-        self.bias_txt.setEnabled(ok)
-        if not ok:
-            self.bias_on.setChecked(False)
-        self.bias_on.setToolTip("" if ok else
-                                "Bias needs the SR570 current preamp (and the SR570 "
-                                "chosen as bias source in Settings)")
+        if hasattr(self, "ser_kind"):
+            self._ser_changed()
         from scanner import pc_scale
         fac, unit, formula = pc_scale(ScanSettings(amp_mode=m, amp_value=self._amp_value(),
                                                    signal_as="peak"))
@@ -1012,7 +1156,7 @@ class MainWindow(QtWidgets.QMainWindow):
         li = self._laser_lockin()
         self.ps_worker = PowerSetter(self.pm, li, self.pm_target.value() * 1e-6,
                                      self.pm_tol.value(),
-                                     (self.config.get("power_set", {}) or {}).get(
+                                     (self.config.get("power_lock", {}) or {}).get(
                                          "max_amplitude_V", 5.0))
         self.ps_thread = QtCore.QThread()
         self.ps_worker.moveToThread(self.ps_thread)
@@ -1114,9 +1258,11 @@ class MainWindow(QtWidgets.QMainWindow):
         exp = self.config.get("experiment", {}) or {}
         w = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(w)
-        lay.addWidget(QtWidgets.QLabel(
+        lab = QtWidgets.QLabel(
             "Saved with every scan. Write units with the value (e.g. 4.2 K, 1e-6 mbar, "
-            "45°). Values are remembered for the next scan; edit what changed."))
+            "45°). Values are remembered for the next scan; edit what changed.")
+        lab.setWordWrap(True)
+        lay.addWidget(lab)
         self.exp_table = QtWidgets.QTableWidget(0, 2)
         self.exp_table.setHorizontalHeaderLabels(["Quantity", "Value"])
         self.exp_table.horizontalHeader().setStretchLastSection(True)
@@ -1179,6 +1325,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def build_camera_tab(self):
         w = QtWidgets.QWidget()
+        self.cam_tab = w
         lay = QtWidgets.QVBoxLayout(w)
         bar = QtWidgets.QHBoxLayout()
         cc0 = self.config.get("camera", {}) or {}
@@ -1209,6 +1356,68 @@ class MainWindow(QtWidgets.QMainWindow):
         bar.addWidget(self.cam_info)
         bar.addStretch(1)
         lay.addLayout(bar)
+        # calibration + drawing on the camera image
+        from calibration import Calibration
+        self.cal = Calibration.from_dict(cc0.get("calibration"))
+        bar2 = QtWidgets.QHBoxLayout()
+        self.cal_btn = QtWidgets.QPushButton("Calibrate camera")
+        self.cal_btn.setToolTip(
+            "Moves the stage a few µm in x and in y and measures how the image moves, "
+            "so the program knows which stage position every camera pixel shows.\n"
+            "Before: put the cyan cross on the laser spot, focus, and go to a place "
+            "with clear structure (an electrode or flake corner). Takes ~10 s.\n"
+            "Redo it after changing the objective.")
+        self.cal_btn.clicked.connect(self.calibrate_camera)
+        bar2.addWidget(self.cal_btn)
+        bar2.addWidget(QtWidgets.QLabel("move (µm)"))
+        self.cal_step = SISpinBox(1e-6, "µm")
+        self.cal_step.setRange(0.2, 200)
+        self.cal_step.setDecimals(1)
+        self.cal_step.setValue(float(cc0.get("calibration_move_um", 5.0)))
+        self.cal_step.setToolTip("How far the stage moves for the calibration. The image "
+                                 "should move by roughly 5-20 % of its width: about 5 µm "
+                                 "with a 50-100× objective, 20 µm with 10×.")
+        bar2.addWidget(self.cal_step)
+        self.cal_lab = QtWidgets.QLabel()
+        self.cal_lab.setWordWrap(True)
+        self.cal_lab.setMinimumWidth(120)
+        self.cal_lab.setStyleSheet("color:gray")
+        bar2.addWidget(self.cal_lab, 1)
+        lay.addLayout(bar2)
+        bar2 = QtWidgets.QHBoxLayout()          # third row: frame and line on the image
+        self.cam_rois, self.cam_line = [], []
+        self.cam_frame_btn = QtWidgets.QPushButton("Draw scan frame")
+        self.cam_frame_btn.setCheckable(True)
+        self.cam_frame_btn.toggled.connect(self.toggle_cam_frame)
+        self.cam_use_frame = QtWidgets.QPushButton("Scan this frame")
+        self.cam_use_frame.clicked.connect(self.use_cam_frame)
+        self.cam_line_btn = QtWidgets.QPushButton("Draw line")
+        self.cam_line_btn.setCheckable(True)
+        self.cam_line_btn.toggled.connect(self.toggle_cam_line)
+        self.cam_use_line = QtWidgets.QPushButton("Scan this line")
+        self.cam_use_line.clicked.connect(self.use_cam_line)
+        self.cam_draw = self._draw_menu([("Scan frame (move, resize, rotate)",
+                                          self.cam_frame_btn),
+                                         ("Line to scan along", self.cam_line_btn)])
+        for b_ in (self.cam_draw, self.cam_frame_btn, self.cam_use_frame, self.cam_line_btn,
+                   self.cam_use_line):
+            bar2.addWidget(b_)
+        for b_ in (self.cam_frame_btn, self.cam_line_btn, self.cam_use_frame,
+                   self.cam_use_line):
+            b_.setVisible(False)
+        bar2.addStretch(1)
+        bar2.addWidget(self._help_btn(
+            "Camera",
+            "• Drag the cyan cross onto the laser spot once; it marks where the scan "
+            "pixel is.\n"
+            "• Calibrate camera (once, and after changing the objective): focus, put the "
+            "cross on the laser spot, go to a place with clear structure (an electrode or "
+            "flake corner) and press the button. The stage moves a few µm and comes back.\n"
+            "• After calibrating: double-click the image to move the laser there, and use "
+            "Draw ▾ for a scan frame or a line on the live image (they stay on the sample "
+            "when the stage moves), then 'Scan this frame' / 'Scan this line'."))
+        lay.addLayout(bar2)
+        self._show_cal()
         glw = pg.GraphicsLayoutWidget()
         self.cam_plot = glw.addPlot()
         self.cam_plot.setAspectLocked(True)
@@ -1229,10 +1438,6 @@ class MainWindow(QtWidgets.QMainWindow):
             self.cam_cross.setPos(float(cc["spot_x"]), float(cc["spot_y"]))
         self.cam_cross.sigPositionChangeFinished.connect(self._cross_moved)
         lay.addWidget(glw, 1)
-        hint = QtWidgets.QLabel("Drag the cyan cross onto the laser spot once; it marks "
-                                "where the scan pixel is.")
-        hint.setStyleSheet("color:gray")
-        lay.addWidget(hint)
         self.cam_timer = QtCore.QTimer(self)
         self.cam_timer.timeout.connect(self.update_camera)
         self.cam_timer.start(100)
@@ -1240,7 +1445,174 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cam_flipx.toggled.connect(self._cam_flip)
         self.cam_flipy.toggled.connect(self._cam_flip)
         self.map_sel.currentIndexChanged.connect(self.update_camera)
+        self.cam_plot.scene().sigMouseClicked.connect(self._cam_clicked)
+        self._cam_stage = None              # stage position the overlays belong to
+        self.cam_track = QtCore.QTimer(self)
+        self.cam_track.timeout.connect(self._track_overlays)
+        self.cam_track.start(1000)
         return w
+
+    # -- camera calibration and drawing on the camera image --
+    def _show_cal(self):
+        ok = self.cal is not None
+        self.cal_lab.setText(("calibrated: " + self.cal.describe()) if ok
+                             else "not calibrated")
+        for b_ in (self.cam_frame_btn, self.cam_line_btn):
+            b_.setEnabled(ok)
+            b_.setToolTip("" if ok else "Calibrate the camera first")
+        self.cam_use_frame.setEnabled(ok and self.cam_frame_btn.isChecked())
+        self.cam_use_line.setEnabled(ok and self.cam_line_btn.isChecked())
+        self.cam_draw.setEnabled(ok)
+        self.cam_draw.setToolTip("" if ok else "Calibrate the camera first")
+
+    def calibrate_camera(self):
+        if getattr(self, "cal_thread", None) is not None:
+            self.cal_worker.stop()
+            return
+        if self._busy():
+            self.error("Wait until the scan / autofocus has finished.")
+            return
+        if not getattr(self, "_cross_placed", False):
+            self.error("Drag the cyan cross onto the laser spot first.")
+            return
+        p = self.cam_cross.pos()
+        self._save_setting("camera", "calibration_move_um", self.cal_step.value())
+        self.cal_worker = CalibrationWorker(self.hw.stage, self.cam, self.cal_step.value(),
+                                            (p.x(), p.y()))
+        self.cal_thread = QtCore.QThread()
+        self.cal_worker.moveToThread(self.cal_thread)
+        self.cal_thread.started.connect(self.cal_worker.run)
+        self.cal_worker.status.connect(self.statusBar().showMessage)
+        self.cal_worker.done.connect(self._cal_done)
+        self.cal_btn.setText("Cancel calibration")
+        self.start_btn.setEnabled(False)
+        self.cal_thread.start()
+
+    def _cal_done(self, result):
+        self.cal_thread.quit()
+        self.cal_thread.wait()
+        self.cal_thread = self.cal_worker = None
+        self.cal_btn.setText("Calibrate camera")
+        self.start_btn.setEnabled(True)
+        if isinstance(result, str):
+            self.error("Camera calibration did not work:\n\n" + result)
+            return
+        self.cal = result
+        self.config.setdefault("camera", {})["calibration"] = result.to_dict()
+        self._save_setting("camera", "calibration", result.to_dict())
+        self._cam_stage = None
+        self._show_cal()
+        self.toast("Camera calibrated: " + result.describe(), "info")
+
+    def _laser_px(self):
+        p = self.cam_cross.pos()
+        return (p.x(), p.y())
+
+    def _cam_clicked(self, ev):
+        """Double-click on the camera image: move the laser to that spot."""
+        if not ev.double() or self.cal is None:
+            return
+        if self._busy():
+            return
+        p = self.cam_plot.vb.mapSceneToView(ev.scenePos())
+        try:
+            cur = self.hw.stage.position()
+        except Exception as e:
+            self.error(f"Could not read the stage:\n{e}")
+            return
+        x, y = self.cal.px_to_stage(p.x(), p.y(), cur, self._laser_px())
+        if np.hypot(x - cur[0], y - cur[1]) > 2000:
+            return
+        u, v = self.stage_to_user(x, y) if self.origin_xy else (x, y)
+        self.goto_stage(x, y, label=f"({u:.2f}, {v:.2f}) µm (clicked on the camera)")
+        self._track_overlays(force=True)
+
+    def _track_overlays(self, force=False):
+        """Keep frames/lines drawn on the camera on the same spot of the sample
+        when the stage moves (the camera image moves with the stage)."""
+        if self.cal is None or not (self.cam_rois or self.cam_line):
+            return
+        if not force and (self.tabs.currentWidget() is not self.cam_tab or self._busy()):
+            return
+        try:
+            cur = np.array(self.hw.stage.position())
+        except Exception:
+            return
+        if self._cam_stage is not None:
+            d = cur - self._cam_stage
+            if np.hypot(*d) > 0.02:
+                shift = -(self.cal.B @ d)
+                for r in self.cam_rois + self.cam_line:
+                    r.setPos(r.pos() + QtCore.QPointF(*shift), finish=False)
+        self._cam_stage = cur
+
+    def _cam_size(self):
+        img = self.cam_img.image
+        if img is None:
+            return 480, 360
+        return img.shape[1], img.shape[0]
+
+    def toggle_cam_frame(self, on):
+        if on and not self.cam_rois:
+            w, h = self._cam_size()
+            cx, cy = self._laser_px()
+            roi = pg.ROI((cx - w / 6, cy - h / 6), (w / 3, h / 3),
+                         pen=pg.mkPen("#00e5ff", width=2),
+                         hoverPen=pg.mkPen("#ffeb3b", width=2))
+            roi.addScaleHandle([1, 1], [0, 0])
+            roi.addScaleHandle([0, 0], [1, 1])
+            roi.addScaleHandle([1, 0.5], [0, 0.5])
+            roi.addScaleHandle([0.5, 1], [0.5, 0])
+            roi.addRotateHandle([1, 0], [0.5, 0.5])
+            self.cam_plot.addItem(roi)
+            self.cam_rois.append(roi)
+            self._track_overlays(force=True)
+        for r in self.cam_rois:
+            r.setVisible(on)
+        self.cam_use_frame.setEnabled(on)
+        self.cam_use_frame.setVisible(on)
+
+    def toggle_cam_line(self, on):
+        if on and not self.cam_line:
+            w, _ = self._cam_size()
+            cx, cy = self._laser_px()
+            roi = pg.LineSegmentROI([(cx - w / 6, cy), (cx + w / 6, cy)],
+                                    pen=pg.mkPen("#ffeb3b", width=2),
+                                    hoverPen=pg.mkPen("#00e5ff", width=2))
+            self.cam_plot.addItem(roi)
+            self.cam_line.append(roi)
+            self._track_overlays(force=True)
+        for r in self.cam_line:
+            r.setVisible(on)
+        self.cam_use_line.setEnabled(on)
+        self.cam_use_line.setVisible(on)
+
+    def _cam_to_stage(self, pts):
+        cur = self.hw.stage.position()
+        return [self.cal.px_to_stage(x, y, cur, self._laser_px()) for x, y in pts]
+
+    def use_cam_frame(self):
+        if not self.cam_rois or self.cal is None or self._busy():
+            return
+        if self.origin_xy is None:
+            self.error("Set the origin first (Map tab).")
+            return
+        try:
+            self._apply_frame(*self._cam_to_stage(self._roi_corners(self.cam_rois[0])))
+        except Exception as e:
+            self.error(f"Could not use the frame:\n{e}")
+
+    def use_cam_line(self):
+        if not self.cam_line or self.cal is None or self._busy():
+            return
+        r = self.cam_line[0]
+        pts = [r.mapToParent(h.pos()) for h in r.getHandles()]
+        try:
+            a, b = self._cam_to_stage([(p.x(), p.y()) for p in pts])
+        except Exception as e:
+            self.error(f"Could not read the stage:\n{e}")
+            return
+        self.start_line(a, b)
 
     def _cam_flip(self, *_):
         fx, fy = self.cam_flipx.isChecked(), self.cam_flipy.isChecked()
@@ -1264,7 +1636,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._cross_placed = True
 
     def update_camera(self, *_):
-        if self.tabs.currentIndex() != 1:
+        if self.tabs.currentWidget() is not getattr(self, "cam_tab", None):
             return
         if self.cam_live.isChecked():
             try:
@@ -1277,21 +1649,84 @@ class MainWindow(QtWidgets.QMainWindow):
             if "image" in snap:
                 self._show_cam(np.asarray(snap["image"]))
 
+    # -- series: what changes from one map / line to the next --
+    SER_NOTES = {
+        "none": "One map (or line) at the present bias and laser power.",
+        "bias": "One map per bias, e.g. 0, 0.5, 1 or -1:1:250m. Needs the SR570 current "
+                "preamp (Instruments tab) and the SR570 as bias source (Hardware → "
+                "Settings). Ramped back to 0 V at the end.",
+        "power": "One map per laser power on the sample, e.g. 5, 10, 20 or 1:100:*2. Each "
+                 "is set at the scan's start position with the 2 mV SINE OUT steps (one "
+                 "direction) that come closest; the power reached is saved. Needs the power "
+                 "meter. The SINE OUT goes back in 2 mV steps at the end.",
+    }
+
+    def _ser_changed(self, *_):
+        k = self.ser_kind.currentData()
+        if self._ser_shown in self._ser_texts:        # keep what was typed for each kind
+            self._ser_texts[self._ser_shown] = self.ser_vals.text()
+        self._ser_shown = k
+        self.ser_vals.setEnabled(k != "none")
+        self.ser_vals.setText(self._ser_texts.get(k, ""))
+        note = self.SER_NOTES[k]
+        if k == "bias" and not (self.has_bias and self.amp_mode.currentData() == "sr570"):
+            note = "<span style='color:#c62828'>Bias needs the SR570 current preamp " \
+                   "(Instruments tab) and the SR570 as bias source (Hardware → Settings)." \
+                   "</span>"
+        if k == "power" and self.accessory("powermeter") is None:
+            note = "<span style='color:#c62828'>A power series needs the power meter " \
+                   "(Hardware → Settings).</span>"
+        warn = note.startswith("<span")
+        self.ser_note.setText(note if warn else "")
+        self.ser_note.setVisible(warn)
+        self.ser_kind.setToolTip(self.SER_NOTES[k])
+        self._remember_series()
+
+    def _remember_series(self):
+        k = self.ser_kind.currentData()
+        if k in self._ser_texts:
+            self._ser_texts[k] = self.ser_vals.text()
+        vals = {"kind": k, **self._ser_texts}
+        self.config["series"] = vals
+        for key, v in vals.items():
+            self._save_setting("series", key, v)
+
+    def _series(self):
+        """-> (outer, values) for the next map or line scan, checked.
+        ('bias', [None]) = a single map."""
+        from scanner import parse_list
+        k = self.ser_kind.currentData()
+        if k == "none":
+            return "bias", [None]
+        text = self.ser_vals.text()
+        if k == "bias":
+            if not (self.has_bias and self.amp_mode.currentData() == "sr570"):
+                raise ValueError("A bias series needs the SR570 current preamp (Instruments "
+                                 "tab) and the SR570 as bias source (Hardware → Settings).")
+            vals = parse_bias_list(text)
+            lim = self.hw.bias.max_abs_V
+            bad = [b for b in vals if abs(b) > lim]
+            if bad:
+                raise ValueError(f"Bias {bad[0]} V exceeds the limit of {lim} V.")
+        else:
+            if self.accessory("powermeter") is None:
+                raise ValueError("A laser power series needs the power meter. Turn it on "
+                                 "in Hardware → Settings.")
+            vals = parse_list(text, 1e-6)
+            if vals and min(vals) <= 0:
+                raise ValueError("Powers must be above 0.")
+        if not vals:
+            raise ValueError("The list of values for the series is empty.")
+        return k, vals
+
     # ----------------------------------------------------------------
     def settings(self):
         if self.origin_xy is None:
             raise ValueError("Set the origin first (Set origin here).")
-        biases = [None]
-        if self.bias_on.isChecked() and self.bias_on.isEnabled():
-            biases = parse_bias_list(self.bias_txt.text())
-            if not biases:
-                raise ValueError("Bias list is empty")
-            lim = self.hw.bias.max_abs_V
-            bad = [b for b in biases if abs(b) > lim]
-            if bad:
-                raise ValueError(f"Bias {bad[0]} V exceeds the limit of {lim} V "
-                                 "set in config.yaml")
+        outer, values = self._series()
+        biases = values if outer == "bias" else [None]
         return ScanSettings(
+            outer=outer, outer_values=values if outer == "power" else [],
             x_center=self.to_stage(self.xc.value(), self.yc.value())[0],
             y_center=self.to_stage(self.xc.value(), self.yc.value())[1],
             origin_x=self.origin_xy[0], origin_y=self.origin_xy[1],
@@ -1304,6 +1739,7 @@ class MainWindow(QtWidgets.QMainWindow):
             serpentine=self.serp.isChecked(), settle_tc=self.settle.value(),
             settle_auto=self.settle_auto.isChecked(),
             extra_settle_ms=self.extra.value(), biases=biases,
+            auto_range=self.auto_range.isChecked(),
             sample=self.sample.text() or "sample", notes=self.exp_notes.toPlainText(),
             conditions=self.conditions(),
             power_lock=False,
@@ -1316,6 +1752,10 @@ class MainWindow(QtWidgets.QMainWindow):
             signal_as="peak")
 
     def refresh_lockins(self):
+        if self._busy():          # the running measurement is reading the lock-ins
+            self.statusBar().showMessage("The lock-ins are read when the measurement "
+                                         "has finished.")
+            return
         try:
             self._poles_now = []
             for li, lab in ((self.hw.lockin_pc, self.li_pc), (self.hw.lockin_refl, self.li_r)):
@@ -1327,7 +1767,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 except Exception:
                     poles = 4
                 self._poles_now.append(poles)
-                lab.setText(f"τ = {si(tau, 's')}, {6 * poles} dB/oct,  "
+                lab.setText(f"τ = {si(tau, 's')}, {6 * poles} dB/oct\n"
                             f"sens = {si(li.sensitivity(), 'V/A')}")
         except Exception as e:
             self.statusBar().showMessage(f"Lock-in read failed: {e}")
@@ -1340,7 +1780,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.eta.setText("-")
             return
         xs, ys = s.axes()
-        n = len(xs) * len(ys) * len(s.biases)
+        n = len(xs) * len(ys) * len(s.outer_list())
         tau = max(getattr(self, "_tau", {0: 0}).values())
         from scanner import pixel_wait
         taus = list(getattr(self, "_tau", {0: 0}).values()) or [0]
@@ -1348,11 +1788,11 @@ class MainWindow(QtWidgets.QMainWindow):
         wait = pixel_wait(s, taus, poles[:len(taus)] + [4] * (len(taus) - len(poles)))
         if s.mode == "fly":
             per = max(wait, 0.03)                 # ~2 samples per pixel minimum
-            t = n * per + len(ys) * len(s.biases) * 0.5   # + line turnaround
+            t = n * per + len(ys) * len(s.outer_list()) * 0.5   # + line turnaround
         else:
             per = wait + getattr(self, "_step_overhead", 0.1)   # move + read
             t = n * per
-        self.eta.setText(f"{len(xs)}×{len(ys)} px × {len(s.biases)} map(s) "
+        self.eta.setText(f"{len(xs)}×{len(ys)} px × {len(s.outer_list())} map(s) "
                          f"≈ {t / 60:.1f} min")
 
     def _learn_overhead(self, msg):
@@ -1409,6 +1849,9 @@ class MainWindow(QtWidgets.QMainWindow):
                         label=f"({self.xc.value():.2f}, {self.yc.value():.2f}) µm")
 
     def centre_here(self):
+        if self._busy():
+            self.error("Wait until the measurement / autofocus has finished.")
+            return
         try:
             x, y = self.hw.stage.position()
             self.set_origin(x, y)
@@ -1467,6 +1910,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for r in self.rois:
             r.setVisible(on)
         self.use_frame_btn.setEnabled(on)
+        self.use_frame_btn.setVisible(on)
 
     def _frame_info(self):
         if not self.rois:
@@ -1480,13 +1924,23 @@ class MainWindow(QtWidgets.QMainWindow):
         """Fill the scan settings from the frame drawn on the map."""
         if not self.rois or self.data is None:
             return
-        r = self.rois[0]
-        (u0, v0), (w, h), a = (r.pos().x(), r.pos().y()), (r.size()[0], r.size()[1]), r.angle()
-        ca, sa = np.cos(np.radians(a)), np.sin(np.radians(a))
         d = self.data
-        p0 = np.array(self.stage_to_user(*self.map_to_stage(d, u0, v0)))
-        p1 = np.array(self.stage_to_user(*self.map_to_stage(d, u0 + w * ca, v0 + w * sa)))
-        p2 = np.array(self.stage_to_user(*self.map_to_stage(d, u0 - h * sa, v0 + h * ca)))
+        corners = self._roi_corners(self.rois[0])
+        self._apply_frame(*[self.map_to_stage(d, u, v) for u, v in corners])
+
+    @staticmethod
+    def _roi_corners(r):
+        """Corner at the ROI's origin, the end of its width side and the end of
+        its height side, in the coordinates of the plot it sits on."""
+        w, h = r.size()[0], r.size()[1]
+        return [(p.x(), p.y()) for p in (r.mapToParent(QtCore.QPointF(0, 0)),
+                                         r.mapToParent(QtCore.QPointF(w, 0)),
+                                         r.mapToParent(QtCore.QPointF(0, h)))]
+
+    def _apply_frame(self, s0, s1, s2):
+        """Scan tab <- a frame given by three stage positions: start corner,
+        end of the first line, start of the last line."""
+        p0, p1, p2 = (np.array(self.stage_to_user(*p)) for p in (s0, s1, s2))
         ex, ey = p1 - p0, p2 - p0
         ydir = 1 if (ex[0] * ey[1] - ex[1] * ey[0]) >= 0 else -1
         ang = float(np.degrees(np.arctan2(ex[1], ex[0])))
@@ -1508,9 +1962,18 @@ class MainWindow(QtWidgets.QMainWindow):
             "Check the step, then press Start scan.")
 
     def goto_stage(self, x, y, label="", mark=None):
-        if self.thread is not None:
+        if self._busy():
             return
         try:
+            px, py = self.hw.stage.position()
+            dist = float(np.hypot(x - px, y - py))
+            if dist > 500 and QtWidgets.QMessageBox.question(
+                    self, "SPCM",
+                    f"This moves the stage {dist / 1000:.2f} mm.\n\n"
+                    f"Stage now: x = {px:.1f}, y = {py:.1f} µm\n"
+                    f"Target: x = {x:.1f}, y = {y:.1f} µm\n\nMove there?") != \
+                    QtWidgets.QMessageBox.StandardButton.Yes:
+                return
             self.hw.stage.move_to(x, y)
             if mark is not None:
                 for p in (self.pc_panel, self.r_panel):
@@ -1537,15 +2000,718 @@ class MainWindow(QtWidgets.QMainWindow):
         ix, iy = np.argsort(u), np.argsort(v)
         return u[ix], v[iy], ix, iy
 
+    # ---------------------------------------------------------------- line scans
+    def toggle_line(self, on):
+        if on and self.data is None:
+            self.line_btn.setChecked(False)
+            self.error("Open or measure a map first, then draw the line on it.")
+            return
+        if on and not self.line_rois:
+            u, v, _, _ = self._view_axes(self.data)
+            a = (u[0] + (u[-1] - u[0]) * 0.25, v[0] + (v[-1] - v[0]) * 0.5)
+            b = (u[0] + (u[-1] - u[0]) * 0.75, v[0] + (v[-1] - v[0]) * 0.5)
+            for p in (self.pc_panel, self.r_panel):
+                roi = pg.LineSegmentROI([a, b], pen=pg.mkPen("#ffeb3b", width=2),
+                                        hoverPen=pg.mkPen("#00e5ff", width=2))
+                p.plot.addItem(roi)
+                self.line_rois.append(roi)
+            r1, r2 = self.line_rois
+
+            def sync(src, dst):
+                if self._roi_sync:
+                    return
+                self._roi_sync = True
+                dst.setState(src.getState())
+                self._roi_sync = False
+                self._line_info()
+            r1.sigRegionChanged.connect(lambda r: sync(r1, r2))
+            r2.sigRegionChanged.connect(lambda r: sync(r2, r1))
+            self._line_info()
+        for r in self.line_rois:
+            r.setVisible(on)
+        self.use_line_btn.setEnabled(on)
+        self.use_line_btn.setVisible(on)
+
+    def _line_ends(self):
+        """Ends of the drawn line in the map's axes (u, v)."""
+        r = self.line_rois[0]
+        pts = [r.mapToParent(h.pos()) for h in r.getHandles()]
+        return [(p.x(), p.y()) for p in pts]
+
+    def _line_info(self):
+        if not self.line_rois:
+            return
+        (u0, v0), (u1, v1) = self._line_ends()
+        n = int(round(np.hypot(u1 - u0, v1 - v0) / (self.step.value() / 1000))) + 1
+        self.statusBar().showMessage(
+            f"Line ({u0:.2f}, {v0:.2f}) → ({u1:.2f}, {v1:.2f}) µm, "
+            f"{np.hypot(u1 - u0, v1 - v0):.2f} µm, {n} points at the current step "
+            "(drag the ends or the whole line)")
+
+    def scan_line(self):
+        if not self.line_rois or self.data is None:
+            return
+        (u0, v0), (u1, v1) = self._line_ends()
+        self.start_line(self.map_to_stage(self.data, u0, v0),
+                        self.map_to_stage(self.data, u1, v1))
+
+    def start_line(self, start_stage, end_stage):
+        """Scan along a line between two stage positions (µm)."""
+        if self._busy():
+            return
+        import linescan
+        try:
+            base = self.settings()
+            s = linescan.line_settings(
+                start_stage, end_stage, base.step,
+                biases=None if base.biases == [None] else base.biases,
+                outer=base.outer, values=base.outer_values,
+                origin=self.origin_xy, flips=(self.sx < 0, self.sy < 0),
+                settle_tc=base.settle_tc, settle_auto=base.settle_auto,
+                auto_range=base.auto_range, backlash_um=base.backlash_um, extra_settle_ms=base.extra_settle_ms,
+                sample=base.sample, notes=base.notes, conditions=base.conditions,
+                target_power_uW=base.target_power_uW, power_tol_pct=base.power_tol_pct,
+                amp_mode=base.amp_mode, amp_value=base.amp_value,
+                lockin_unit=base.lockin_unit, signal_as=base.signal_as)
+            px, py = self.hw.stage.position()
+            dist = float(np.hypot(start_stage[0] - px, start_stage[1] - py))
+        except Exception as e:
+            self.error(str(e))
+            return
+        if dist > 500 and QtWidgets.QMessageBox.question(
+                self, "SPCM", f"The line starts {dist / 1000:.2f} mm away from where the "
+                "stage is now. Move there and scan?") != \
+                QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        if not self._switch_reminder("map"):     # lock-in measurement
+            return
+        self.refresh_lockins()
+        self.remember_experiment()
+        self.worker = ScanWorker(self.hw, s, self.folder.text() or "data",
+                                 self.config.get("power_lock", {}) or {},
+                                 name=self.measurement_name("line", s))
+        self.line_data = self.worker.data
+        self.line_data.path = self.worker.path
+        self.show_plot(self.line_view)
+        self._redraw_line()
+        self.thread = QtCore.QThread()
+        self.worker.moveToThread(self.thread)
+        self.thread.started.connect(self.worker.run)
+        self.worker.pixel.connect(self._line_pixel)
+        self.worker.status.connect(self.statusBar().showMessage)
+        self.worker.progress.connect(self.on_progress)
+        self.worker.finished.connect(self.on_line_finished)
+        self.worker.failed.connect(self.on_line_failed)
+        self.worker.notify.connect(self.toast)
+        self.start_btn.setEnabled(False)
+        self.use_line_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.discard_btn.setEnabled(True)
+        self._discard = False
+        self._last_line_draw = 0
+        self.thread.start()
+
+    def _line_pixel(self, *_):
+        now = time.time()
+        if now - self._last_line_draw > 0.15:
+            self._last_line_draw = now
+            self._redraw_line()
+        elif not getattr(self, "_line_queued", False):
+            self._line_queued = True
+            QtCore.QTimer.singleShot(200, self._flush_line)
+
+    def _flush_line(self):
+        self._line_queued = False
+        self._last_line_draw = time.time()
+        self._redraw_line()
+
+    def _redraw_line(self, *_):
+        if getattr(self, "line_data", None) is None:
+            return
+        try:
+            self.line_view.set_data(self.line_data, self.ch_pc.currentIndex())
+        except Exception as e:
+            self.statusBar().showMessage(f"Line plot: {e}")
+
+    def on_line_finished(self, path):
+        if self._nothing_saved(path):
+            self.use_line_btn.setEnabled(self.line_btn.isChecked())
+            return
+        done = self.line_data.completed
+        self._cleanup()
+        self.use_line_btn.setEnabled(self.line_btn.isChecked())
+        if getattr(self, "_discard", False):
+            self._delete_scan_files(path)
+            self.statusBar().showMessage("Line scan stopped and discarded (nothing saved)")
+            return
+        try:
+            from scanner import update_experiment
+            update_experiment(path, self.conditions(), self.exp_notes.toPlainText())
+        except Exception as e:
+            self.statusBar().showMessage(f"Could not update notes: {e}")
+        try:
+            import linescan
+            self.line_data = load(path)
+            linescan.export_csv(self.line_data)
+            linescan.save_all(self.line_data)
+            self._redraw_line()
+        except Exception as e:
+            self.statusBar().showMessage(f"CSV/figure export failed: {e}")
+            return
+        self.statusBar().showMessage(("Line scan finished" if done else "Line scan stopped")
+                                     + f" - saved {os.path.abspath(path)} + PNG and CSV")
+
+    def on_line_failed(self, tb):
+        self._cleanup()
+        self.use_line_btn.setEnabled(self.line_btn.isChecked())
+        if getattr(self, "_discard", False):
+            self._delete_scan_files(self.line_data.path)
+            self.statusBar().showMessage("Line scan stopped and discarded (nothing saved)")
+            return
+        self._redraw_line()
+        self.error("Line scan aborted (what was measured is saved):\n\n" + tb)
+
+    # ---------------------------------------------------------------- point sweeps
+    def build_sweep_tab(self, lay):
+        sw = self.config.get("sweep", {}) or {}
+        g = QtWidgets.QGroupBox("Where")
+        f = QtWidgets.QFormLayout(g)
+        row = QtWidgets.QHBoxLayout()
+        self.sw_pos = QtWidgets.QLabel("-")
+        self.sw_pos.setWordWrap(True)
+        rd = QtWidgets.QPushButton("Read")
+        rd.setToolTip("Read where the stage is now")
+        rd.clicked.connect(self._show_spot)
+        row.addWidget(self.sw_pos, 1)
+        row.addWidget(rd)
+        f.addRow("Laser at", row)
+        lay.addWidget(g)
+
+        g = QtWidgets.QGroupBox("Sweep")
+        f = QtWidgets.QFormLayout(g)
+        self.sw_kind = QtWidgets.QComboBox()
+        self.sw_kind.addItem("Power", "power")
+        self.sw_kind.addItem("Bias", "bias")
+        self.sw_kind.addItem("Bias × power", "bias_power")
+        self.sw_kind.setToolTip("Bias × power: for every bias (outer loop) the whole "
+                                "power list (inner loop)")
+        self.sw_kind.setCurrentIndex(max(self.sw_kind.findData(sw.get("kind", "power")), 0))
+        f.addRow("Sweep", self.sw_kind)
+        self.sw_powers = QtWidgets.QLineEdit(str(sw.get("powers", "1:50:5")))
+        self.sw_powers.setToolTip(
+            "Power on the sample, in µW (meter reading ÷ ratio).\n"
+            "  1, 2, 5, 10        a list\n"
+            "  1:50:5             1, 6, 11 … 46, 50  (start:stop:step; stop always included)\n"
+            "  1:100:*2           1, 2, 4, 8 … 64, 100  (×2 each time: even on a log scale)\n"
+            "Prefixes are absolute: 500n = 0.5 µW, 1m = 1000 µW.\n"
+            "Each power is set with the SINE OUT step (2 mV) that comes closest; "
+            "the power actually reached is recorded.")
+        f.addRow("Powers (µW)", self.sw_powers)
+        self.sw_biases = QtWidgets.QLineEdit(str(sw.get("biases", "-1:1:0.25")))
+        self.sw_biases.setToolTip("e.g. 0, 0.5, 1   or   -1:1:250m  (start:stop:step)")
+        f.addRow("Biases (V)", self.sw_biases)
+        self.sw_navg = QtWidgets.QSpinBox()
+        self.sw_navg.setRange(1, 1000)
+        self.sw_navg.setValue(int(sw.get("n_avg", 10)))
+        self.sw_navg.setToolTip("Readings per point, about one time constant apart. "
+                                "The mean is saved, and the spread (standard deviation) "
+                                "as the error bar.")
+        f.addRow("Readings per point", self.sw_navg)
+        self.sw_restore = QtWidgets.QCheckBox("Put the SINE OUT back afterwards")
+        self.sw_restore.setChecked(bool(sw.get("restore_power", True)))
+        f.addRow(self.sw_restore)
+        self.sw_note = QtWidgets.QLabel()
+        self.sw_note.setWordWrap(True)
+        self.sw_note.setStyleSheet("color:#c62828")
+        f.addRow(self.sw_note)
+        self.sw_eta = QtWidgets.QLabel("-")
+        f.addRow("Est. time", self.sw_eta)
+        lay.addWidget(g)
+        row = QtWidgets.QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(self._help_btn(
+            "Point sweep",
+            "• The sweep runs where the laser is now. Double-click a map (or the calibrated "
+            "camera) to move the laser to a spot, or use the joystick.\n"
+            "• Each point: set the power and/or bias → wait until the lock-ins have settled "
+            "(Timing, Map tab) → take the readings (mean ± spread).\n"
+            "• Powers are set with 2 mV SINE OUT steps in one direction; the power reached "
+            "is saved.\n"
+            "• The plots appear in the Plot tab. Saved like maps: own folder, .h5, CSV, PNG."))
+        lay.addLayout(row)
+        lay.addStretch(1)
+        self.sw_kind.currentIndexChanged.connect(self._sweep_kind_changed)
+        for w in (self.sw_powers, self.sw_biases):
+            w.editingFinished.connect(self.update_sweep_eta)
+        self.sw_navg.valueChanged.connect(self.update_sweep_eta)
+        self._sweep_kind_changed()
+
+    def _sweep_kind_changed(self, *_):
+        k = self.sw_kind.currentData()
+        self.sw_powers.setEnabled(k in ("power", "bias_power"))
+        self.sw_biases.setEnabled(k in ("bias", "bias_power"))
+        self.sw_restore.setEnabled(k in ("power", "bias_power"))
+        notes = []
+        if k in ("power", "bias_power") and self.pm is None:
+            notes.append("Power sweeps need the power meter (Hardware → Settings).")
+        if k in ("bias", "bias_power") and not (
+                self.has_bias and self.amp_mode.currentData() == "sr570"):
+            notes.append("Bias sweeps need the SR570 current preamp: choose it in "
+                         "Instruments → Photocurrent amplifier, and as bias source "
+                         "in Hardware → Settings.")
+        self.sw_note.setText("\n".join(notes))
+        self.sw_note.setVisible(bool(notes))
+        self.update_sweep_eta()
+
+    def _side_tab_changed(self, i):
+        self.start_btn.setText({1: "Start sweep", 2: "Start I–V"}.get(i, "Start scan"))
+        if i == 1:
+            self._show_spot()
+            self._sweep_kind_changed()
+
+    def _show_spot(self):
+        if self.thread is not None or self.origin_xy is None:
+            return
+        try:
+            X, Y = self.hw.stage.position()
+            u, v = self.stage_to_user(X, Y)
+            self.sw_pos.setText(f"({u:.2f}, {v:.2f}) µm")
+            self.sw_pos.setToolTip("Position of the laser, measured from the origin (0, 0).")
+        except Exception as e:
+            self.sw_pos.setText("?")
+            self.statusBar().showMessage(f"Could not read the stage: {e}")
+
+    def _sweep_settings(self):
+        from scanner import parse_list
+        from sweeps import SweepSettings
+        k = self.sw_kind.currentData()
+        powers, biases = [], []
+        if k in ("power", "bias_power"):
+            if self.pm is None:
+                raise ValueError("Power sweeps need the power meter. Turn it on in "
+                                 "Hardware → Settings.")
+            powers = parse_list(self.sw_powers.text(), 1e-6)
+            if not powers:
+                raise ValueError("The power list is empty.")
+            if min(powers) <= 0:
+                raise ValueError("Powers must be above 0.")
+        if k in ("bias", "bias_power"):
+            if not (self.has_bias and self.amp_mode.currentData() == "sr570"):
+                raise ValueError("Bias sweeps need the SR570 current preamp (Instruments "
+                                 "tab) and the SR570 as bias source (Hardware → Settings).")
+            biases = parse_bias_list(self.sw_biases.text())
+            if not biases:
+                raise ValueError("The bias list is empty.")
+            lim = self.hw.bias.max_abs_V
+            bad = [b for b in biases if abs(b) > lim]
+            if bad:
+                raise ValueError(f"Bias {bad[0]} V exceeds the limit of {lim} V.")
+        if self.origin_xy is None:
+            raise ValueError("Set the origin first (Map tab).")
+        X, Y = self.hw.stage.position()
+        u, v = self.stage_to_user(X, Y)
+        lc = self.config.get("power_lock", {}) or {}
+        return SweepSettings(
+            kind=k, powers_uW=powers, biases=biases, n_avg=self.sw_navg.value(),
+            max_amp_V=float(lc.get("max_amplitude_V", 5.0)),
+            laser_lockin=lc.get("lockin", "photocurrent"),
+            restore_power=self.sw_restore.isChecked(),
+            x_stage=X, y_stage=Y, u=u, v=v,
+            settle_auto=self.settle_auto.isChecked(), settle_tc=self.settle.value(),
+            extra_settle_ms=self.extra.value(), auto_range=self.auto_range.isChecked(),
+            amp_mode=self.amp_mode.currentData(), amp_value=self._amp_value(),
+            lockin_unit=self._lockin_unit(), signal_as="peak",
+            sample=self.sample.text() or "sample", notes=self.exp_notes.toPlainText(),
+            conditions=self.conditions())
+
+    def update_sweep_eta(self, *_):
+        from scanner import parse_list, pixel_wait
+        try:
+            k = self.sw_kind.currentData()
+            npw = len(parse_list(self.sw_powers.text(), 1e-6)) if k != "bias" else 1
+            nb = len(parse_bias_list(self.sw_biases.text())) if k != "power" else 1
+        except Exception:
+            self.sw_eta.setText("check the lists")
+            return
+        taus = list(getattr(self, "_tau", {0: 0.1}).values()) or [0.1]
+        poles = getattr(self, "_poles_now", [4] * len(taus))
+        s = ScanSettings(settle_auto=self.settle_auto.isChecked(),
+                         settle_tc=self.settle.value(), extra_settle_ms=self.extra.value())
+        wait = pixel_wait(s, taus, (list(poles) + [4] * len(taus))[:len(taus)])
+        per = wait + self.sw_navg.value() * max(max(taus), 0.03) + (1.5 if k != "bias" else 0)
+        self.sw_eta.setText(f"{nb * npw} points ≈ {nb * npw * per / 60:.1f} min")
+
+    def _remember_sweep(self):
+        vals = {"kind": self.sw_kind.currentData(), "powers": self.sw_powers.text(),
+                "biases": self.sw_biases.text(), "n_avg": self.sw_navg.value(),
+                "restore_power": self.sw_restore.isChecked()}
+        self.config["sweep"] = vals
+        for k, v in vals.items():
+            self._save_setting("sweep", k, v)
+
+    def start_sweep(self):
+        try:
+            s = self._sweep_settings()
+        except Exception as e:
+            self.error(str(e))
+            return
+        if not self._switch_reminder("map"):     # lock-in measurement
+            return
+        from sweeps import SweepWorker
+        self.refresh_lockins()
+        self.remember_experiment()
+        self._remember_sweep()
+        self._show_spot()
+        self.worker = SweepWorker(self.hw, s, self.folder.text() or "data",
+                                  name=self.measurement_name(s.kind, s))
+        self.sweep_data = self.worker.data
+        self.sweep_data.path = self.worker.path
+        self.show_plot(self.sweep_view)
+        self._redraw_sweep()
+        self.thread = QtCore.QThread()
+        self.worker.moveToThread(self.thread)
+        self.thread.started.connect(self.worker.run)
+        self.worker.point.connect(lambda *_: self._redraw_sweep())
+        self.worker.status.connect(self.statusBar().showMessage)
+        self.worker.progress.connect(self.on_progress)
+        self.worker.finished.connect(self.on_sweep_finished)
+        self.worker.failed.connect(self.on_sweep_failed)
+        self.worker.notify.connect(self.toast)
+        self.start_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.discard_btn.setEnabled(True)
+        self._discard = False
+        self.thread.start()
+
+    def _redraw_sweep(self, *_):
+        if getattr(self, "sweep_data", None) is None:
+            return
+        try:
+            self.sweep_view.set_data(self.sweep_data, self.ch_pc.currentIndex())
+        except Exception as e:
+            self.statusBar().showMessage(f"Sweep plot: {e}")
+
+    def on_sweep_finished(self, path):
+        done = self.sweep_data.completed
+        self._cleanup()
+        if getattr(self, "_discard", False):
+            self._delete_scan_files(path)
+            self.statusBar().showMessage("Sweep stopped and discarded (nothing saved)")
+            return
+        try:
+            from scanner import update_experiment
+            update_experiment(path, self.conditions(), self.exp_notes.toPlainText())
+        except Exception as e:
+            self.statusBar().showMessage(f"Could not update notes: {e}")
+        self.remember_experiment()
+        try:
+            from sweeps import load_sweep, export_csv, save_all
+            self.sweep_data = load_sweep(path)
+            export_csv(self.sweep_data)
+            save_all(self.sweep_data)
+            self._redraw_sweep()
+        except Exception as e:
+            self.statusBar().showMessage(f"CSV/figure export failed: {e}")
+            return
+        self.statusBar().showMessage(("Sweep finished" if done else "Sweep stopped") +
+                                     f" - saved {os.path.abspath(path)} + PNG and CSV")
+        self.toast("Sweep finished" if done else "Sweep stopped", "info")
+
+    def on_sweep_failed(self, tb):
+        self._cleanup()
+        if getattr(self, "_discard", False):
+            self._delete_scan_files(self.sweep_data.path)
+            self.statusBar().showMessage("Sweep stopped and discarded (nothing saved)")
+            return
+        self._redraw_sweep()
+        self.error("Sweep aborted (what was measured is saved):\n\n" + tb)
+
+    # ---------------------------------------------------------------- quick I-V
+    def build_iv_tab(self, lay):
+        ivc = self.config.get("iv", {}) or {}
+
+        def sp(v, lo, hi, dec, scale, unit, step=1.0):
+            w = SISpinBox(scale, unit)
+            w.setRange(lo, hi)
+            w.setDecimals(dec)
+            w.setSingleStep(step)
+            w.setValue(v)
+            return w
+        g = QtWidgets.QGroupBox("Sweep: cycles of 0 → max → min → 0")
+        f = QtWidgets.QFormLayout(g)
+        lim = float(getattr(self.hw.bias, "max_abs_V", 5.0))
+        self.iv_max = sp(float(ivc.get("v_max", 1.0)), 0, lim, 3, 1.0, "V", 0.1)
+        self.iv_min = sp(float(ivc.get("v_min", -1.0)), -lim, 0, 3, 1.0, "V", 0.1)
+        self.iv_step = sp(float(ivc.get("step_mV", 10)), 1, 5000, 0, 1e-3, "mV", 1)
+        self.iv_step.setToolTip("Plain numbers are mV; the SR570 sets the bias in 1 mV "
+                                "steps, so values are rounded to 1 mV.")
+        self.iv_cycles = QtWidgets.QSpinBox()
+        self.iv_cycles.setRange(1, 1000)
+        self.iv_cycles.setValue(int(ivc.get("cycles", 1)))
+        self.iv_wait = sp(float(ivc.get("wait_ms", 100)), 0, 1e5, 0, 1e-3, "ms", 10)
+        self.iv_wait.setToolTip("Wait after each bias step before reading")
+        self.iv_navg = QtWidgets.QSpinBox()
+        self.iv_navg.setRange(1, 1000)
+        self.iv_navg.setValue(int(ivc.get("n_avg", 5)))
+        f.addRow("Max (V)", self.iv_max)
+        f.addRow("Min (V)", self.iv_min)
+        f.addRow("Step (mV)", self.iv_step)
+        f.addRow("Cycles", self.iv_cycles)
+        f.addRow("Wait per point (ms)", self.iv_wait)
+        f.addRow("Readings per point", self.iv_navg)
+        self.iv_eta = QtWidgets.QLabel("-")
+        f.addRow("Est. time", self.iv_eta)
+        lay.addWidget(g)
+        g = QtWidgets.QGroupBox("SR570 (DC)")
+        f = QtWidgets.QFormLayout(g)
+        self.iv_sens = QtWidgets.QComboBox()
+        for i in range(self.amp_sens.count()):
+            self.iv_sens.addItem(self.amp_sens.itemText(i), self.amp_sens.itemData(i))
+        i = self.iv_sens.findData(float(ivc.get("sensitivity", 1e-6)))
+        self.iv_sens.setCurrentIndex(i if i >= 0 else self.iv_sens.findData(1e-6))
+        self.iv_sens.setToolTip("Set this to the SR570 front-panel sensitivity. The SR570 "
+                                "can't be read, so the current is calculated with this value.")
+        f.addRow("Sensitivity", self.iv_sens)
+        lay.addWidget(g)
+        self.iv_note = QtWidgets.QLabel()
+        self.iv_note.setWordWrap(True)
+        self.iv_note.setStyleSheet("color:#c62828")
+        lay.addWidget(self.iv_note)
+        row = QtWidgets.QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(self._help_btn(
+            "Quick I–V",
+            "• DC current vs the SR570 bias. The SR570 output goes to AUX IN 1 on the rear "
+            "of the photocurrent SR830 (instead of the lock-in input).\n"
+            "• You'll be reminded to set the SR570 filter OFF and LOW DRIFT and to move the "
+            "cable; before the next map, to change them back.\n"
+            "• Current = AUX IN voltage × the sensitivity selected here.\n"
+            "• The bias ramps back to 0 V at the end, on Stop and on errors. The sweep stops "
+            "if the SR570 output goes above 10 V. The curve appears in the Plot tab."))
+        lay.addLayout(row)
+        lay.addStretch(1)
+        for w in (self.iv_max, self.iv_min, self.iv_step, self.iv_wait):
+            w.valueChanged.connect(self.update_iv_eta)
+        for w in (self.iv_cycles, self.iv_navg):
+            w.valueChanged.connect(self.update_iv_eta)
+        ok = not isinstance(self.hw.bias, instruments.NoBias)
+        self.iv_note.setText("" if ok else "Quick I–V needs the SR570 as bias source "
+                             "(Hardware → Settings → Bias).")
+        self.iv_note.setVisible(not ok)
+        self.update_iv_eta()
+
+    def _iv_settings(self):
+        import iv
+        if isinstance(self.hw.bias, instruments.NoBias):
+            raise ValueError("Quick I–V needs the SR570 as bias source "
+                             "(Hardware → Settings → Bias).")
+        return iv.IVSettings(
+            v_max=self.iv_max.value(), v_min=self.iv_min.value(),
+            step=self.iv_step.value() / 1000, cycles=self.iv_cycles.value(),
+            wait_ms=self.iv_wait.value(), n_avg=self.iv_navg.value(),
+            sensitivity=float(self.iv_sens.currentData()),
+            aux_in=int((self.config.get("iv", {}) or {}).get("aux_in", 1)),
+            sample=self.sample.text() or "sample", notes=self.exp_notes.toPlainText(),
+            conditions=self.conditions())
+
+    def update_iv_eta(self, *_):
+        import iv
+        try:
+            n = len(iv.bias_points(iv.IVSettings(
+                v_max=self.iv_max.value(), v_min=self.iv_min.value(),
+                step=self.iv_step.value() / 1000, cycles=self.iv_cycles.value())))
+        except Exception:
+            self.iv_eta.setText("-")
+            return
+        per = self.iv_wait.value() / 1000 + self.iv_navg.value() * 0.012 + 0.06
+        self.iv_eta.setText(f"{n} points ≈ {n * per / 60:.1f} min")
+
+    def _switch_reminder(self, kind):
+        """Remind to re-cable / re-set the SR570 when switching between lock-in
+        maps and the DC I-V. Returns False if the user cancels."""
+        last = (self.config.get("ui", {}) or {}).get("last_measurement", "map")
+        if kind == last:
+            return True
+        if kind == "iv":
+            sens = self.iv_sens.currentText()
+            text = ("Switching to a DC I–V. Please check:\n\n"
+                    "•  SR570 filter: OFF\n"
+                    "•  SR570 gain mode: LOW DRIFT\n"
+                    "•  SR570 output cable: moved to AUX IN 1 (rear of the photocurrent SR830)\n"
+                    f"•  SR570 sensitivity on the front panel: {sens}\n\n"
+                    "Ready?")
+        else:
+            text = ("Switching back to lock-in maps. Please check:\n\n"
+                    "•  SR570 output cable: back to the lock-in signal input\n"
+                    "•  SR570 filter and gain mode: back to your lock-in settings\n"
+                    "•  SR570 sensitivity matches 'Photocurrent amplifier' (Instruments tab)\n\n"
+                    "Ready?")
+        ans = QtWidgets.QMessageBox.question(self, "SPCM", text)
+        if ans != QtWidgets.QMessageBox.StandardButton.Yes:
+            return False
+        self.config.setdefault("ui", {})["last_measurement"] = kind
+        self._save_setting("ui", "last_measurement", kind)
+        return True
+
+    def start_iv(self):
+        import iv
+        try:
+            s = self._iv_settings()
+            iv.bias_points(s)
+        except Exception as e:
+            self.error(str(e))
+            return
+        if not self._switch_reminder("iv"):
+            return
+        for k, v in (("v_max", s.v_max), ("v_min", s.v_min), ("step_mV", s.step * 1000),
+                     ("cycles", s.cycles), ("wait_ms", s.wait_ms), ("n_avg", s.n_avg),
+                     ("sensitivity", s.sensitivity)):
+            self._save_setting("iv", k, v)
+        self.remember_experiment()
+        self.worker = iv.IVWorker(self.hw, s, self.folder.text() or "data",
+                                  name=self.measurement_name("iv", s))
+        self.iv_data = self.worker.data
+        self.show_plot(self.iv_glw)
+        self._redraw_iv()
+        self.thread = QtCore.QThread()
+        self.worker.moveToThread(self.thread)
+        self.thread.started.connect(self.worker.run)
+        self.worker.point.connect(self._redraw_iv)
+        self.worker.status.connect(self.statusBar().showMessage)
+        self.worker.progress.connect(self.on_progress)
+        self.worker.finished.connect(self.on_iv_finished)
+        self.worker.failed.connect(self.on_iv_failed)
+        self.worker.notify.connect(self.toast)
+        self.start_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.discard_btn.setEnabled(True)
+        self._discard = False
+        self.thread.start()
+
+    def _redraw_iv(self, *_):
+        d = getattr(self, "iv_data", None)
+        p = self.iv_plot
+        p.clear()
+        self.iv_legend.clear()
+        if d is None or not d.rows:
+            return
+        a = d.array()
+        cycles = sorted(set(a[:, 2].astype(int)))
+        cm = pg.colormap.get("viridis")
+        cols = cm.map(np.linspace(0, 0.85, max(len(cycles), 1)), mode="qcolor")
+        for c, col in zip(cycles, cols):
+            sel = a[:, 2] == c
+            p.plot(a[sel, 0], a[sel, 1], pen=pg.mkPen(col, width=1.5), symbol="o",
+                   symbolSize=4, symbolPen=None, symbolBrush=col,
+                   name=f"cycle {c}" if len(cycles) > 1 else None)
+        last = a[-1]
+        p.setTitle(f"{last[0]:+.3f} V   {si(last[1], 'A')}")
+
+    def on_iv_finished(self, path):
+        done = self.iv_data.completed
+        self._cleanup()
+        if getattr(self, "_discard", False):
+            self._delete_scan_files(path)
+            self.statusBar().showMessage("I–V stopped and discarded (nothing saved)")
+            return
+        try:
+            from scanner import update_experiment
+            update_experiment(path, self.conditions(), self.exp_notes.toPlainText())
+        except Exception:
+            pass
+        try:
+            import iv
+            self.iv_data = iv.load_iv(path)
+            iv.export_csv(self.iv_data)
+            iv.save_all(self.iv_data)
+            self._redraw_iv()
+        except Exception as e:
+            self.statusBar().showMessage(f"CSV/figure export failed: {e}")
+            return
+        self.statusBar().showMessage(("I–V finished" if done else "I–V stopped")
+                                     + f" - saved {os.path.abspath(path)} + PNG and CSV")
+
+    def on_iv_failed(self, tb):
+        self._cleanup()
+        if getattr(self, "_discard", False):
+            self._delete_scan_files(self.iv_data.path)
+            return
+        self._redraw_iv()
+        self.error("I–V aborted (bias ramped to 0 V, what was measured is saved):\n\n" + tb)
+
+    # ---------------------------------------------------------------- resolution
+    def toggle_resolution(self, on):
+        if on and self.data is None:
+            self.res_btn.setChecked(False)
+            self.error("Open or measure a map first.")
+            return
+        if on and not self.res_rois:
+            u, v, _, _ = self._view_axes(self.data)
+            a = (u[0] + (u[-1] - u[0]) * 0.3, v[0] + (v[-1] - v[0]) * 0.5)
+            b = (u[0] + (u[-1] - u[0]) * 0.7, v[0] + (v[-1] - v[0]) * 0.5)
+            step = abs(u[1] - u[0]) if len(u) > 1 else 0.5
+            roi = pg.LineROI(a, b, width=step * 2, pen=pg.mkPen("#ff9800", width=2),
+                             hoverPen=pg.mkPen("#ffeb3b", width=2))
+            self.r_panel.plot.addItem(roi)
+            roi.sigRegionChangeFinished.connect(lambda *_: self.update_resolution())
+            self.res_rois = [roi]
+        for r in self.res_rois:
+            r.setVisible(on)
+        if on:
+            if self.res_dialog is None:
+                self.res_dialog = ResolutionDialog(self)
+            self.res_dialog.show()
+            self.res_dialog.raise_()
+            self.update_resolution()
+        elif self.res_dialog is not None:
+            self.res_dialog.hide()
+
+    def _res_line(self):
+        r = self.res_rois[0]
+        w = r.size()[1]
+        p0 = r.mapToParent(QtCore.QPointF(0, w / 2))
+        p1 = r.mapToParent(QtCore.QPointF(r.size()[0], w / 2))
+        return (p0.x(), p0.y()), (p1.x(), p1.y()), abs(w)
+
+    def update_resolution(self):
+        if not self.res_rois or self.res_dialog is None or self.data is None:
+            return
+        import resolution
+        d = self.data
+        u, v, oix, oiy = self._view_axes(d)
+        ib = max(self.map_sel.currentIndex(), 0)
+        ch = min(self.ch_r.currentIndex(), 2)
+        img = d.refl[ib, :, :, ch][np.ix_(oiy, oix)]
+        p0, p1, width = self._res_line()
+        try:
+            m = resolution.measure(img, u, v, p0, p1, width)
+        except Exception as e:
+            self.res_dialog.show_error(str(e))
+            return
+        m["map_step_um"] = float(min(abs(u[1] - u[0]), abs(v[1] - v[0]))) \
+            if len(u) > 1 and len(v) > 1 else float("nan")
+        m["width_um"] = width
+        m["channel"] = CHANNELS[ch]
+        m["map"] = getattr(d, "path", "") or "(not saved)"
+        self.res_dialog.show_result(m)
+
     # ----------------------------------------------------------------
     def start(self):
         if getattr(self, "af_thread", None) is not None:
             self.error("Wait for the autofocus to finish.")
             return
+        if self.side_tabs.currentIndex() == 1:
+            self.start_sweep()
+            return
+        if self.side_tabs.currentIndex() == 2:
+            self.start_iv()
+            return
         try:
             s = self.settings()
         except Exception as e:
             self.error(str(e))
+            return
+        if not self._switch_reminder("map"):
             return
         # sanity check: is the scan where the stage is now?
         try:
@@ -1633,9 +2799,46 @@ class MainWindow(QtWidgets.QMainWindow):
                 self, "SPCM", "Stop and delete this scan?\nNothing of it will be saved.") \
                 != QtWidgets.QMessageBox.StandardButton.Yes:
             return
+        if not self.worker:      # it finished (and was saved) while the question was open
+            self.statusBar().showMessage("It had already finished and is saved.")
+            return
         self._discard = True
         self.worker.stop()
         self.statusBar().showMessage("Stopping, the scan will be discarded…")
+
+    # -- small helpers for a calm window --
+    def _help_btn(self, title, text):
+        """A small '?' button: the explanation as tooltip, and in a window on click."""
+        b = QtWidgets.QToolButton()
+        b.setText("?")
+        b.setToolTip(text)
+        b.setAutoRaise(True)
+        b.setStyleSheet("font-weight:bold")
+        b.clicked.connect(lambda: QtWidgets.QMessageBox.information(self, title, text))
+        return b
+
+    def _draw_menu(self, items):
+        """'Draw ▾' button whose menu switches the given checkable buttons on/off."""
+        tb = QtWidgets.QToolButton()
+        tb.setText("Draw ▾")
+        tb.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QtWidgets.QMenu(tb)
+        for label, btn in items:
+            act = menu.addAction(label)
+            act.setCheckable(True)
+            act.toggled.connect(btn.setChecked)
+            btn.toggled.connect(lambda on, a=act: a.isChecked() != on and a.setChecked(on))
+        tb.setMenu(menu)
+        return tb
+
+    def show_plot(self, w):
+        """Show a line scan / point sweep / I-V plot in the Plot tab."""
+        self.plot_stack.setCurrentWidget(w)
+        name = {self.iv_glw: "I–V", self.line_view: "line scan",
+                self.sweep_view: "point sweep"}.get(w, "")
+        i = self.tabs.indexOf(self.plot_stack)
+        self.tabs.setTabText(i, f"Plot: {name}" if name else "Plot")
+        self.tabs.setCurrentWidget(self.plot_stack)
 
     # -- measurement names --
     def _fill_name_menu(self):
@@ -1667,6 +2870,12 @@ class MainWindow(QtWidgets.QMainWindow):
              "date": time.strftime("%Y%m%d"), "time": time.strftime("%H%M"),
              "type": {"map": "map", "line": "line"}.get(kind, kind.replace("_", "") + "sweep")}
         v.update({k: val for k, val in self.experiment_fields()})
+        if kind == "iv":
+            v["type"] = "IV"
+            if s is not None:
+                v["bias"] = naming.range_text([s.v_min, s.v_max], "V")
+            v["power"] = self._power_now_text()
+            return v
         try:
             s = s or (self.settings() if kind in ("map", "line") else None)
         except Exception:
@@ -1685,6 +2894,8 @@ class MainWindow(QtWidgets.QMainWindow):
             v["power"] = naming.range_text(list(s.powers_uW), "uW")
         elif kind == "bias":
             v["power"] = self._power_now_text()
+        elif s is not None and getattr(s, "outer", "bias") == "power":   # power series
+            v["power"] = naming.range_text(list(s.outer_values), "uW")
         else:              # maps and lines: the set power, or what the meter reads now
             tgt = getattr(s, "target_power_uW", None) if s is not None else None
             v["power"] = naming.num(tgt, "uW") if tgt else self._power_now_text()
@@ -1730,9 +2941,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _setup_views(self):
         d = self.data
-        for r in self.rois:
+        for r in self.rois + self.res_rois + self.line_rois:
             r.scene() and r.scene().removeItem(r)
-        self.rois = []
+        self.rois, self.res_rois, self.line_rois = [], [], []
+        if self.line_btn.isChecked():
+            self.line_btn.setChecked(False)
+        if self.res_btn.isChecked():
+            self.res_btn.setChecked(False)
         if self.frame_btn.isChecked():
             self.frame_btn.setChecked(False)
         u, v, _, _ = self._view_axes(d)
@@ -1740,8 +2955,9 @@ class MainWindow(QtWidgets.QMainWindow):
             p.set_axes(u, v)
         self.map_sel.blockSignals(True)
         self.map_sel.clear()
-        for b in d.settings.biases:
-            self.map_sel.addItem("single" if b is None else f"{b:g} V")
+        from scanner import outer_text
+        for b in d.settings.outer_list():
+            self.map_sel.addItem("single" if b is None else outer_text(d.settings, b))
         self.map_sel.blockSignals(False)
         self.redraw()
 
@@ -1812,7 +3028,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _nothing_saved(self, path):
         """The run stopped before any data was taken (e.g. power setting aborted)."""
-        if path:
+        if path and os.path.exists(path):
             return False
         self._cleanup()
         self.statusBar().showMessage("Stopped before the measurement started - "
@@ -1858,7 +3074,34 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def save_figure(self):
         """Figure like the publication layout, using the channel and colour
-        scale currently shown (Manual limits are kept; otherwise symmetric)."""
+        scale currently shown (Manual limits are kept; otherwise symmetric).
+        On the Line scan / Point sweep / I-V tab: that plot's figure."""
+        w = self.tabs.currentWidget()
+        if w is self.plot_stack:
+            w = self.plot_stack.currentWidget()
+        other = {self.line_view: ("line_data", "linescan"),
+                 self.sweep_view: ("sweep_data", "sweeps"),
+                 self.iv_glw: ("iv_data", "iv")}.get(w)
+        if other is not None:
+            d = getattr(self, other[0], None)
+            if d is None:
+                self.error("Nothing to save yet.")
+                return
+            base = os.path.splitext(getattr(d, "path", "") or "figure")[0]
+            path, _ = QtWidgets.QFileDialog.getSaveFileName(
+                self, "Save figure", base + ".png", "PNG image (*.png);;PDF (*.pdf);;SVG (*.svg)")
+            if path:
+                try:
+                    import importlib
+                    mod = importlib.import_module(other[1])
+                    if other[1] == "iv":
+                        mod.save_figure(d, path)
+                    else:
+                        mod.save_figure(d, path, channel=min(self.ch_pc.currentIndex(), 2))
+                    self.statusBar().showMessage(f"Figure saved: {path}")
+                except Exception as e:
+                    self.error(f"Could not save the figure:\n{e}")
+            return
         if self.data is None:
             self.error("No scan to save yet.")
             return
@@ -1899,7 +3142,28 @@ class MainWindow(QtWidgets.QMainWindow):
             self, "Open scan", self.folder.text(), "HDF5 (*.h5)")
         if path:
             try:
-                self.data = load(path)
+                import iv
+                if iv.is_iv_file(path):
+                    self.iv_data = iv.load_iv(path)
+                    self._redraw_iv()
+                    self.show_plot(self.iv_glw)
+                    self.statusBar().showMessage(f"Loaded {path}")
+                    return
+                from sweeps import is_sweep_file, load_sweep
+                if is_sweep_file(path):
+                    self.sweep_data = load_sweep(path)
+                    self._redraw_sweep()
+                    self.show_plot(self.sweep_view)
+                    self.statusBar().showMessage(f"Loaded {path}")
+                    return
+                d = load(path)
+                if getattr(d.settings, "scan_type", "map") == "line":
+                    self.line_data = d
+                    self._redraw_line()
+                    self.show_plot(self.line_view)
+                    self.statusBar().showMessage(f"Loaded {path}")
+                    return
+                self.data = d
                 self._setup_views()
                 self.statusBar().showMessage(f"Loaded {path}")
             except Exception as e:
@@ -1909,19 +3173,37 @@ class MainWindow(QtWidgets.QMainWindow):
         QtWidgets.QMessageBox.critical(self, "SPCM", msg)
 
     def closeEvent(self, ev):
-        if getattr(self, "af_thread", None) is not None:
-            self.af_worker.stop()
-            self.af_thread.quit()
-            self.af_thread.wait(10000)
-        if self.thread is not None:
+        running = [(getattr(self, w, None), getattr(self, t, None)) for w, t in
+                   (("worker", "thread"), ("af_worker", "af_thread"),
+                    ("cal_worker", "cal_thread"), ("ps_worker", "ps_thread"))]
+        running = [(w, t) for w, t in running if t is not None]
+        if running:
             if QtWidgets.QMessageBox.question(
-                    self, "SPCM", "A scan is running. Stop it and quit?") != \
+                    self, "SPCM", "A measurement is running. Stop it and quit?") != \
                     QtWidgets.QMessageBox.StandardButton.Yes:
                 ev.ignore()
                 return
-            self.worker.stop()
-            self.thread.quit()
-            self.thread.wait(5000)
+            # stop, then wait until it has really finished (bias back to 0, SINE OUT
+            # back, data saved) before the instruments are disconnected
+            self.statusBar().showMessage("Stopping safely (bias, laser power, saving)…")
+            QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
+            QtWidgets.QApplication.processEvents(
+                QtCore.QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+            try:
+                for w, t in running:
+                    if w is not None and hasattr(w, "stop"):
+                        w.stop()
+                    t.quit()
+                done = all(t.wait(180000) for w, t in running)
+            finally:
+                QtWidgets.QApplication.restoreOverrideCursor()
+            if not done:
+                QtWidgets.QMessageBox.warning(
+                    self, "SPCM", "The measurement has not finished stopping yet, so the "
+                    "program stays open (closing now would cut off the instruments in the "
+                    "middle of a command). Wait a moment and close again.")
+                ev.ignore()
+                return
         self.remember_experiment()
         for t in self.findChildren(QtCore.QTimer):
             t.stop()
@@ -1930,3 +3212,127 @@ class MainWindow(QtWidgets.QMainWindow):
             self.hw.close()
             self._hw_closed = True
         ev.accept()
+
+
+class ResolutionDialog(QtWidgets.QDialog):
+    """Profile + edge fit and derivative + Gaussian for 'Measure resolution'."""
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.win = win
+        self.setWindowTitle("SPCM – resolution from a reflection edge")
+        self.resize(560, 640)
+        lay = QtWidgets.QVBoxLayout(self)
+        self.result = QtWidgets.QLabel("Move the orange line across a sharp edge.")
+        self.result.setWordWrap(True)
+        self.result.setStyleSheet("font-size:12pt")
+        lay.addWidget(self.result)
+        glw = pg.GraphicsLayoutWidget()
+        lay.addWidget(glw, 1)
+        self.p1 = glw.addPlot(row=0, col=0)
+        self.p2 = glw.addPlot(row=1, col=0)
+        self.p2.setXLink(self.p1)
+        self.p1.setLabel("left", "Reflection", units="V")
+        self.p2.setLabel("left", "dR/dx", units="V/µm")
+        self.p2.setLabel("bottom", "Distance along the line (µm)")
+        for p in (self.p1, self.p2):
+            p.getAxis("bottom").enableAutoSIPrefix(False)
+            p.showGrid(x=True, y=True, alpha=0.25)
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(QtWidgets.QLabel("Objective NA"))
+        self.na = SISpinBox(1.0)
+        self.na.setRange(0.05, 1.6)
+        self.na.setDecimals(2)
+        self.na.setSingleStep(0.05)
+        self.na.setValue(float((win.config.get("ui", {}) or {}).get("objective_na", 0.9)))
+        self.na.valueChanged.connect(self._na_changed)
+        row.addWidget(self.na)
+        row.addStretch(1)
+        self.save_btn = QtWidgets.QPushButton("Save (PNG, CSV, TXT) next to the map")
+        self.save_btn.clicked.connect(self.save)
+        row.addWidget(self.save_btn)
+        lay.addLayout(row)
+        self.m = None
+        from pyqtgraph.Qt import QtGui
+        dark = bool((win.config.get("ui", {}) or {}).get("dark", False))
+        style_plots(glw, dark)
+
+    def _na_changed(self, v):
+        self.win._save_setting("ui", "objective_na", float(v))
+        if self.m is not None:
+            self.show_result(self.m)
+
+    def _wavelength_nm(self):
+        pm = getattr(self.win, "pm", None)
+        if pm is not None and getattr(pm, "wavelength_nm", None):
+            return float(pm.wavelength_nm)
+        return float((self.win.config.get("powermeter", {}) or {}).get("wavelength_nm", 532))
+
+    def show_error(self, text):
+        self.m = None
+        self.result.setText(f"<span style='color:#c62828'>{text}</span>")
+        self.p1.clear()
+        self.p2.clear()
+
+    def show_result(self, m):
+        import resolution
+        self.m = m
+        fit, x, y = m["fit"], m["distance"], m["values"]
+        lam = self._wavelength_nm()
+        dl = 0.51 * lam / self.na.value()
+        lines = [f"<b>FWHM = {fit['fwhm'] * 1000:.0f} nm</b>   (10–90 %: "
+                 f"{fit['w1090'] * 1000:.0f} nm)",
+                 f"Diffraction limit 0.51 λ/NA = {dl:.0f} nm  (λ = {lam:g} nm, NA = "
+                 f"{self.na.value():.2f})"]
+        if m.get("realigned"):
+            lines.append(f"The line crossed the edge {m['angle_deg']:.0f}° off perpendicular; "
+                         "measured along the edge's normal instead.")
+        step = m.get("map_step_um", float("nan"))
+        if np.isfinite(step) and step > fit["fwhm"] / 3:
+            lines.append(f"<span style='color:#c62828'>The map step ({step * 1000:.0f} nm) is "
+                         "coarse for this spot size: the true FWHM may be smaller. Scan the "
+                         f"edge with a step of ≤ {fit['fwhm'] * 250:.0f} nm.</span>")
+        L = float(np.nanmax(x) - np.nanmin(x))
+        if fit["w1090"] > 0.4 * L:
+            lines.append("<span style='color:#c62828'>The line is short compared with the "
+                         "edge: make it longer so it reaches the flat parts on both "
+                         "sides.</span>")
+        if fit.get("contrast_to_noise", 99) < 10:
+            lines.append("<span style='color:#c62828'>Weak edge or noisy profile: the fit "
+                         "is uncertain.</span>")
+        self.result.setText("<br>".join(lines))
+        self.p1.clear()
+        self.p2.clear()
+        xx = np.linspace(np.nanmin(x), np.nanmax(x), 300)
+        self.p1.plot(x, y, pen=None, symbol="o", symbolSize=4, symbolBrush="#888",
+                     symbolPen=None)
+        self.p1.plot(xx, resolution.model(xx, fit), pen=pg.mkPen("#e53935", width=2))
+        self.p2.plot(x, resolution.derivative(x, y), pen=None, symbol="o", symbolSize=4,
+                     symbolBrush="#888", symbolPen=None)
+        self.p2.plot(xx, resolution.gaussian(xx, fit), pen=pg.mkPen("#1e88e5", width=2))
+
+    def save(self):
+        import resolution
+        m = self.m
+        d = self.win.data
+        path = getattr(d, "path", None) if d is not None else None
+        if m is None or not path:
+            self.win.error("Nothing to save, or the map is not saved yet.")
+            return
+        folder = os.path.dirname(os.path.abspath(path))
+        base = resolution.next_base(folder, os.path.splitext(os.path.basename(path))[0])
+        lam = self._wavelength_nm()
+        info = {"Map file": os.path.basename(path), "Reflection channel": m["channel"],
+                "Line from (µm)": f"({m['p0'][0]:.3f}, {m['p0'][1]:.3f})",
+                "Line to (µm)": f"({m['p1'][0]:.3f}, {m['p1'][1]:.3f})",
+                "Band width averaged (µm)": f"{m['width_um']:.3f}",
+                "Re-measured perpendicular to the edge": m.get("realigned", False),
+                "Map step (nm)": f"{m.get('map_step_um', float('nan')) * 1000:.0f}",
+                "Wavelength (nm)": f"{lam:g}", "Objective NA": f"{self.na.value():.2f}",
+                "Diffraction limit 0.51 λ/NA (nm)": f"{0.51 * lam / self.na.value():.0f}"}
+        try:
+            files = resolution.save(base, m["distance"], m["values"], m["fit"], info)
+            self.win.statusBar().showMessage("Resolution saved: " + ", ".join(
+                os.path.basename(f) for f in files))
+        except Exception as e:
+            self.win.error(f"Could not save:\n{e}")

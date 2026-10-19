@@ -1,0 +1,27 @@
+# Gives every release a clear name ("SPCM 1.2.1 - testing", "- stable", "- old test version")
+# and its part of CHANGELOG.md as description. Runs when a release is published, when
+# CHANGELOG.md changes, or with the "Run workflow" button.
+name: Release notes
+
+on:
+  release:
+    types: [published, released, prereleased, edited]
+  push:
+    branches: [main, next, dev]
+    paths: [CHANGELOG.md, tools/release_notes.py, .github/workflows/release-notes.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency: release-notes
+
+jobs:
+  notes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update release names and descriptions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/release_notes.py
