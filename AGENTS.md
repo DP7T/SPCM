@@ -125,9 +125,9 @@ It needs the libraries from `requirements.txt`; without PyQt5 it skips the windo
 
 ## Status and branches
 
-- `main`: **1.0** (0.9.0 + the fixes from the first lab test). Released; this is what the lab uses.
-- `next`: 1.1.x in testing (quick I–V, resolution, bug fixes). Becomes one commit "SPCM 1.1.x" on `main` once tested.
-- `dev`: 1.2 in testing (camera calibration, line scans, bias / power series, point sweeps), built on `next`.
+- `main`: **1.2.3** (released 2026-10-19, tested on the microscope; this is what the lab uses). Earlier: 1.0.0.
+- `dev`: where new work happens; becomes one commit "SPCM x.y.z" on `main` once tested on the microscope.
+- `next`: the old 1.1.x test line, fully contained in 1.2.3; no longer used.
 - `experimental-0.10`: the old experimental line (0.10.0). Its useful features were rebuilt on 1.x in 1.2; don't merge it.
 - Each released version is one commit on `main` ("SPCM x.y.z"), with a tag `vx.y.z`.
 

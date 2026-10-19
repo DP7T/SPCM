@@ -86,7 +86,15 @@ def main():
         word, first = describe(rels)[t]
         v = ".".join(map(str, ver(t)))
         old = r.get("body") or ""
-        if v in notes:
+        prev = [ver(x["tag_name"]) for x in rels
+                if not x["prerelease"] and ver(x["tag_name"]) < ver(t)]
+        if not r["prerelease"] and prev and v in notes:
+            # stable: everything since the previous stable version, newest first
+            p0 = max(prev)
+            since = [k for k in notes if p0 < tuple(map(int, k.split("."))) <= ver(t)]
+            what = (f"### What's new since v{'.'.join(map(str, p0))}\n\n"
+                    + "\n\n".join(f"#### {k}\n{notes[k]}" for k in since))
+        elif v in notes:
             what = "### What's in it\n" + notes[v]
         elif MARK in old:                       # keep what an earlier run wrote
             what = old.split(MARK, 1)[1].replace(INSTALL, "").strip()

@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.2.3 (in testing)
+## 1.2.3 (2026-10-19)
 - **First pixel of each line** (step scans): the stage now stops one step before the line,
   waits there, and then steps onto the first pixel like onto any other pixel. Before, the
   first pixel came right after the long move back from the end of the previous line and
@@ -51,7 +51,7 @@ Safety and data fixes after a code review:
 - **Measure resolution** refuses lines that don't cross a clear edge
 - All new measurements are saved like maps: own folder, name pattern, numbers-only CSV
 
-## 1.1.1 (in testing)
+## 1.1.1 (pre-release)
 - **Set power now** respects *Never set SINE OUT above* from Settings (it used the
   default 5 V before - also in 1.0)
 - While a measurement runs, the window no longer talks to the stage or the lock-ins

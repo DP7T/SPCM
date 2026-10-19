@@ -5,7 +5,7 @@ name: Release notes
 
 on:
   release:
-    types: [published]
+    types: [published, released, prereleased, edited]
   push:
     branches: [main, next, dev]
     paths: [CHANGELOG.md, tools/release_notes.py, .github/workflows/release-notes.yml]
