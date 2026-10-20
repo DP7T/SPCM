@@ -3575,7 +3575,7 @@ class PhaseDialog(QtWidgets.QDialog):
         else:
             img = Yr[np.ix_(self.iy, self.ix)]
             m = np.nanmax(np.abs(Yr)) if np.isfinite(Yr).any() else 1.0
-            self.img.setImage(np.nan_to_num(img).T, autoLevels=False)
+            self.img.setImage(np.nan_to_num(img), autoLevels=False)   # row-major
             self.bar.setLevels((-m, m))         # its own scale: noise or a pattern?
             sx = np.nanmax(np.abs(Xr)) if np.isfinite(Xr).any() else np.nan
             self.p2.setTitle(f"Y after the correction (own scale, max {m / sx * 100:.0f} % of X):"
