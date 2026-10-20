@@ -244,6 +244,28 @@ def _():
     assert abs(r2["offset"][0] - bx) < 0.1 * abs(bx) and abs(r2["phase_deg"] - 12) < 2, r2
     phase.remove_copy(d.path)
     assert not os.path.exists(p)
+    # a strong spike with a random phase: ignored, angle and sign unchanged
+    Xs, Ys = X.copy(), Y.copy()
+    big = 3 * np.nanmax(np.hypot(X, Y))
+    Xs[0, 0, 0], Ys[0, 0, 0] = -big * np.cos(np.deg2rad(70)), -big * np.sin(np.deg2rad(70))
+    r3 = phase.find_phase(Xs, Ys)
+    assert r3["n_rejected"] >= 1 and abs(r3["phase_deg"] - r["phase_deg"]) < 1, r3["message"]
+    # sign: follows the last angle; far from it -> majority, with a warning
+    assert abs(phase.find_phase(X, Y, ref_deg=10)["phase_deg"] - 12) < 1.5
+    r4 = phase.find_phase(X, Y, ref_deg=-170)
+    assert abs(phase._wrap(r4["phase_deg"] + 168)) < 1.5, r4["phase_deg"]
+    assert "FAR" in phase.find_phase(X, Y, ref_deg=100)["message"]
+    # series: sign change with bias is kept; one angle; a real phase change is flagged
+    X2, Y2 = np.stack([X[0], -X[0]]), np.stack([Y[0], -Y[0]])
+    r5 = phase.find_phase(X2, Y2, ref_deg=12)
+    Xr, _ = phase.rotate(X2, Y2, r5["phase_deg"])
+    i = np.nanargmax(np.abs(Xr[0]))
+    assert np.sign(Xr[0].ravel()[i]) == -np.sign(Xr[1].ravel()[i]), "sign change lost"
+    assert not r5["inconsistent_maps"], r5["message"]
+    X3, Y3 = phase.rotate(X[0], Y[0], -30)           # map 2: phase 30° different
+    r6 = phase.find_phase(np.stack([X[0], X3]), np.stack([Y[0], Y3]))
+    assert r6["inconsistent_maps"] and "CHECK" in r6["message"], r6["message"]
+    print("      spike ignored, sign follows the last angle, series checked")
 
 
 @check("stage: a move that stops off target is retried once, then refused")

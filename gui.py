@@ -3077,8 +3077,12 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         try:
             X, Y = phase.processed_xy(d)
-            res = phase.find_phase(X, Y)
+            ref = self._phase_ref()
+            res = phase.find_phase(X, Y, ref_deg=ref)
+            res["ref_used"] = ref
             saved = phase.write_copy(d, res) if res.get("ok") else None
+            if saved:
+                self._save_setting("phase", "last_deg", float(res["phase_deg"]))
         except Exception as e:
             self.toast(f"Phase correction failed: {e}", "warn")
             return
@@ -3089,6 +3093,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.phase_dialog.close()
             self.phase_dialog = PhaseDialog(self, d, res, saved)
             self.phase_dialog.show()
+
+    def _phase_ref(self):
+        """The angle used last time (sign convention for the next file), or None."""
+        v = (self.config.get("phase", {}) or {}).get("last_deg")
+        return float(v) if v is not None else None
 
     def phase_shown(self):
         """Open the phase correction for the map / line shown now."""
@@ -3104,7 +3113,7 @@ class MainWindow(QtWidgets.QMainWindow):
                        "measurement to correct it again.")
             return
         X, Y = phase.processed_xy(d)
-        res = phase.find_phase(X, Y)
+        res = phase.find_phase(X, Y, ref_deg=self._phase_ref())
         cp = phase.copy_path(d.path)
         if getattr(self, "phase_dialog", None) is not None:
             self.phase_dialog.close()
@@ -3395,6 +3404,8 @@ class PhaseDialog(QtWidgets.QDialog):
         super().__init__(win)
         import phase
         self.win, self.d, self.res = win, d, dict(res)
+        # the angle remembered BEFORE this file (the sign convention to follow)
+        self.ref = res["ref_used"] if "ref_used" in res else win._phase_ref()
         self.setWindowTitle("SPCM – phase correction")
         self.resize(900, 560)
         self.X, self.Y = phase.processed_xy(d)
@@ -3543,7 +3554,7 @@ class PhaseDialog(QtWidgets.QDialog):
     def recompute(self, *_):
         import phase
         self.res = phase.find_phase(self.X, self.Y, self.bg.isChecked(),
-                                    self._substrate_mask())
+                                    self._substrate_mask(), ref_deg=self.ref)
         if self.res.get("ok"):
             self._set_angle(self.res["phase_deg"])
         self._status(" <i>(not saved yet)</i>")
@@ -3559,6 +3570,10 @@ class PhaseDialog(QtWidgets.QDialog):
         self.p1.clear()
         self.p1.plot(X[good], Y[good], pen=None, symbol="o", symbolSize=4,
                      symbolBrush=pg.mkBrush(90, 120, 200, 120), symbolPen=None)
+        rej = self.res.get("rejected")
+        if rej is not None and np.shape(rej) == np.shape(X) and np.any(rej):
+            self.p1.plot(X[rej], Y[rej], pen=None, symbol="x", symbolSize=10,
+                         symbolBrush=pg.mkBrush("#c62828"), symbolPen=pg.mkPen("#c62828"))
         if np.any(good):
             L = float(np.nanmax(np.hypot(X - off[0], Y - off[1])))
             c, s = np.cos(np.deg2rad(phi)), np.sin(np.deg2rad(phi))
@@ -3595,6 +3610,7 @@ class PhaseDialog(QtWidgets.QDialog):
         try:
             self.saved = phase.write_copy(self.d, res)
             self.res = res
+            self.win._save_setting("phase", "last_deg", float(res["phase_deg"]))
             self._status()
             self.win.toast(f"Phase-corrected copy saved ({res['phase_deg']:+.1f}°)", "info")
         except Exception as e:

@@ -185,8 +185,17 @@ Instead of autophasing the lock-in at the strongest point, the program finds the
 the finished measurement. All real photocurrent has one phase, so in the X–Y plane its pixels
 lie on one straight line through zero; noise is a round blob. The program takes the pixels
 clearly above the noise (5×), finds the direction of that line, and rotates X and Y by that
-one angle for the whole map (and for all maps of a series), with X positive at the strongest
-pixel, like autophasing there by hand.
+one angle for the whole map (and for all maps of a series, so sign changes with bias stay).
+
+- **Spikes:** strong pixels whose phase doesn't fit the line are ignored (red × in the plot).
+- **Sign** (a line has two directions, 180° apart): the program takes the one closest to the
+  angle it used last time. As long as the lock-in phase, cables, SR570 setting and chopping
+  frequency are unchanged, the right angle stays about the same, so every file gets the same
+  sign convention. The first time, or if the new angle is more than 30° from the last one
+  (then you get a warning: something was changed), it takes the direction in which most of
+  the signal is positive.
+- **Series:** each map is also fitted on its own, only as a check; if the angles differ by
+  more than their uncertainty, the window warns that the phase may change with bias / power.
 
 - It works on the processed photocurrent (after the SR570 / √2 conversion).
 - The result goes into a **separate copy** in the same folder: `<name>_phased.h5`, its CSV

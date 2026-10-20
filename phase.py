@@ -13,7 +13,11 @@ in raw/*.
 
 Angle convention: X' = X cos(phi) + Y sin(phi), Y' = -X sin(phi) + Y cos(phi),
 theta' = theta - phi. That is the same as raising the lock-in's PHASE by phi.
-Sign: X' is positive at the strongest pixel (like autophasing there by hand).
+Sign (which of the two directions of the line): the one closer to the angle used
+last time (same convention across files while the lock-in phase is untouched); without
+one, the direction in which most of the signal is positive. Strong pixels whose phase
+doesn't fit the line (spikes) are ignored. For a series, each map is also fitted alone,
+only to check that one angle fits all.
 """
 import copy
 import os
@@ -23,6 +27,7 @@ import numpy as np
 SIGNAL_SIGMA = 5.0        # a pixel counts as signal above 5 x the noise
 QUIET_FRACTION = 0.3      # the weakest 30 % of pixels give the noise / background
 MIN_SIGNAL_PIXELS = 5
+REF_MAX_DEG = 30.0        # farther from the last angle: something was changed
 
 
 def copy_path(path):
@@ -36,22 +41,44 @@ def rotate(X, Y, phi_deg, offset=(0.0, 0.0)):
     return x * np.cos(p) + y * np.sin(p), -x * np.sin(p) + y * np.cos(p)
 
 
-def find_phase(X, Y, subtract_background=False, substrate=None):
-    """X, Y: processed photocurrent of all pixels (any shape, NaN allowed).
+def _line_angle(xs, ys):
+    """Angle (deg, -90..90) of the best line through zero (weights R^2)."""
+    sxx, syy, sxy = np.sum(xs * xs), np.sum(ys * ys), np.sum(xs * ys)
+    return 0.5 * np.degrees(np.arctan2(2 * sxy, sxx - syy))
+
+
+def _wrap(a):
+    return (a + 180.0) % 360.0 - 180.0
+
+
+def find_phase(X, Y, subtract_background=False, substrate=None, ref_deg=None):
+    """X, Y: processed photocurrent, shape (maps, ...) or any shape, NaN allowed.
     subtract_background: subtract the mean X, Y of the bare substrate, which is
     `substrate` (a True/False mask of the same shape, marked by the user on the map)
     or, without a mask, the weakest 30 % of the pixels.
-    -> dict(ok, phase_deg, offset, noise, n_signal, spread, message)."""
+    ref_deg: the angle used last time (lock-in phase untouched -> about the same):
+    of the two directions of the line, the one closer to it is taken (same sign
+    convention as before). Without it, or if it is more than REF_MAX_DEG away: the
+    direction in which most of the signal (weighted by strength) is positive.
+    -> dict(ok, phase_deg, offset, noise, n_signal, n_rejected, rejected (mask of the
+    input shape), per_map, sign_rule, message, ...)."""
     X, Y = np.asarray(X, float), np.asarray(Y, float)
+    shape = X.shape
+    nmaps = shape[0] if X.ndim >= 3 else 1
+    mapno = (np.broadcast_to(np.arange(nmaps).reshape((-1,) + (1,) * (X.ndim - 1)), shape)
+             .ravel() if X.ndim >= 3 else np.zeros(X.size, int))
     sub = None if substrate is None else np.asarray(substrate, bool).ravel()
     X, Y = X.ravel(), Y.ravel()
     good = np.isfinite(X) & np.isfinite(Y)
+    where = np.flatnonzero(good)
     if sub is not None:
         sub = sub[good]
-    X, Y = X[good], Y[good]
+    X, Y, mapno = X[good], Y[good], mapno[good]
+    rejected = np.zeros(shape, bool)
     out = {"ok": False, "phase_deg": 0.0, "offset": [0.0, 0.0], "noise": np.nan,
-           "n_signal": 0, "n_pixels": int(X.size), "spread": np.nan,
-           "subtract_background": bool(subtract_background)}
+           "n_signal": 0, "n_rejected": 0, "n_pixels": int(X.size), "spread": np.nan,
+           "subtract_background": bool(subtract_background), "rejected": rejected,
+           "per_map": [], "sign_rule": ""}
     if X.size < MIN_SIGNAL_PIXELS * 2:
         out["message"] = "Too few pixels for a phase correction."
         return out
@@ -73,24 +100,71 @@ def find_phase(X, Y, subtract_background=False, substrate=None):
         # over the lowest 30 % is 0.333 sigma^2 (Rayleigh distribution)
         sigma = float(np.sqrt(np.mean(rq ** 2) / 0.333)) if rq.size else np.nan
     sig = r > SIGNAL_SIGMA * sigma
-    n = int(sig.sum())
-    out.update(offset=list(off), noise=sigma, n_signal=n)
-    if n < MIN_SIGNAL_PIXELS:
-        out["message"] = (f"No clear signal: only {n} pixel(s) above {SIGNAL_SIGMA:g} x the "
-                          "noise. No phase correction.")
+    out.update(offset=list(off), noise=sigma)
+    if sig.sum() < MIN_SIGNAL_PIXELS:
+        out["n_signal"] = int(sig.sum())
+        out["message"] = (f"No clear signal: only {int(sig.sum())} pixel(s) above "
+                          f"{SIGNAL_SIGMA:g} x the noise. No phase correction.")
         return out
-    xs, ys = x[sig], y[sig]
-    sxx, syy, sxy = np.sum(xs * xs), np.sum(ys * ys), np.sum(xs * ys)
-    phi = 0.5 * np.degrees(np.arctan2(2 * sxy, sxx - syy))    # line through zero
-    xr, yr = rotate(xs, ys, phi)
-    k = int(np.argmax(np.hypot(xs, ys)))
-    if xr[k] < 0:                                   # X' positive at the strongest pixel
-        phi += 180.0
-        xr, yr = -xr, -yr
-    phi = (phi + 180.0) % 360.0 - 180.0
+    # fit the line, then drop pixels whose phase doesn't fit (spikes, glitches) and
+    # fit again. A real pixel is off the line only by its noise; allow 4 sigma + 10 %.
+    use = sig.copy()
+    for _ in range(4):
+        phi = _line_angle(x[use], y[use])
+        xr, yr = rotate(x, y, phi)
+        bad = sig & (np.abs(yr) > 4 * sigma + 0.1 * np.abs(xr))
+        if np.array_equal(bad, sig & ~use):
+            break
+        use = sig & ~bad
+        if use.sum() < MIN_SIGNAL_PIXELS:
+            use = sig.copy()                  # don't throw everything away
+            phi = _line_angle(x[use], y[use])
+            break
+    n, n_bad = int(use.sum()), int((sig & ~use).sum())
+    flat = np.zeros(int(np.prod(shape)), bool)
+    flat[where[sig & ~use]] = True
+    rejected = flat.reshape(shape)
+    # which of the two directions: stay close to the last angle, else majority
+    xr, yr = rotate(x[use], y[use], phi)
+    if ref_deg is not None and np.isfinite(ref_deg):
+        if abs(_wrap(phi + 180.0 - ref_deg)) < abs(_wrap(phi - ref_deg)):
+            phi += 180.0
+        if abs(_wrap(phi - ref_deg)) <= REF_MAX_DEG:
+            rule = f"sign as in your earlier measurements (last angle {ref_deg:+.1f}°)"
+        else:
+            phi = _majority(phi, x[use], y[use])
+            rule = (f"FAR from your last angle {ref_deg:+.1f}° - was the lock-in phase, a "
+                    "cable, the SR570 setting or the chopping frequency changed? Sign: most "
+                    "of the signal positive")
+    else:
+        phi = _majority(phi, x[use], y[use])
+        rule = "sign: most of the signal positive (no earlier angle to follow)"
+    phi = float(_wrap(phi))
+    xr, yr = rotate(x[use], y[use], phi)
     spread = float(np.sqrt(np.mean(yr ** 2)) / max(np.sqrt(np.mean(xr ** 2)), 1e-300))
     yrms_noise = float(np.sqrt(np.mean(yr ** 2)) / sigma) if sigma > 0 else np.nan
-    out.update(ok=True, phase_deg=float(phi), spread=spread, y_rms_over_noise=yrms_noise)
+    # angle uncertainty (deg) from the noise: sigma / sqrt(sum R^2)
+    err = float(np.degrees(sigma / np.sqrt(np.sum(xr ** 2)))) if sigma > 0 else np.nan
+    out.update(ok=True, phase_deg=phi, spread=spread, y_rms_over_noise=yrms_noise,
+               n_signal=n, n_rejected=n_bad, rejected=rejected, phase_err_deg=err,
+               sign_rule=rule)
+    # each map on its own, only to check that one angle fits the whole series
+    per, inconsistent = [], []
+    if nmaps > 1:
+        for k in range(nmaps):
+            m = use & (mapno == k)
+            if m.sum() < MIN_SIGNAL_PIXELS:
+                per.append(None)
+                continue
+            a = _line_angle(x[m], y[m])
+            d = _wrap(2 * (a - phi)) / 2            # line angles: compare modulo 180
+            xm, _ = rotate(x[m], y[m], a)
+            e = float(np.degrees(sigma / np.sqrt(np.sum(xm ** 2))))
+            per.append({"map": k, "angle_deg": float(phi + d), "err_deg": e})
+            if abs(d) > 3 * np.hypot(e, err) + 1.0:
+                inconsistent.append(k)
+    out["per_map"] = per
+    out["inconsistent_maps"] = inconsistent
     if yrms_noise <= 3:
         q = "one clear phase (Y after the correction is only noise)"
     elif spread < 0.2:
@@ -98,9 +172,26 @@ def find_phase(X, Y, subtract_background=False, substrate=None):
     else:
         q = ("CHECK: Y after the correction is well above the noise - not all signal has "
              "the same phase (background pickup, or the phase changed during the scan?)")
-    out["message"] = (f"Phase {phi:+.1f}° from {n} pixels above {SIGNAL_SIGMA:g}× noise: {q}. "
-                      f"(Same as raising the lock-in PHASE by {phi:.1f}°.)")
+    msg = (f"Phase {phi:+.1f}° ± {err:.1f}° from {n} pixels above {SIGNAL_SIGMA:g}× noise: {q}. "
+           f"(Same as raising the lock-in PHASE by {phi:.1f}°.)")
+    if n_bad:
+        msg += (f" {n_bad} strong pixel(s) ignored: their phase doesn't fit (spikes?), "
+                "red in the X–Y plot.")
+    if inconsistent:
+        msg += (" CHECK: the phase differs between maps of the series ("
+                + ", ".join(f"map {k}: {per[k]['angle_deg']:+.1f}°" for k in inconsistent)
+                + ") - it may change with bias / power.")
+    elif nmaps > 1 and any(per):
+        msg += " Same phase in every map of the series."
+    out["message"] = msg + " " + rule[0].upper() + rule[1:] + "."
     return out
+
+
+def _majority(phi, x, y):
+    """Of phi and phi + 180: the one in which most of the signal, weighted by
+    strength (X'|X'|), is positive."""
+    xr, _ = rotate(x, y, phi)
+    return phi if np.sum(xr * np.abs(xr)) >= 0 else phi + 180.0
 
 
 def processed_xy(d):
@@ -126,8 +217,9 @@ def make_copy(d, res):
     c.pc[..., 0], c.pc[..., 1] = Xr / fac, Yr / fac
     c.pc[..., 2] = np.hypot(Xr, Yr) / fac
     c.pc[..., 3] = np.degrees(np.arctan2(Yr, Xr))
-    c.phase = {k: res[k] for k in ("phase_deg", "offset", "noise", "n_signal", "spread",
-                                   "subtract_background", "background_from", "message") if k in res}
+    c.phase = {k: res[k] for k in ("phase_deg", "phase_err_deg", "offset", "noise",
+                                   "n_signal", "n_rejected", "spread", "subtract_background",
+                                   "background_from", "sign_rule", "message") if k in res}
     c.phase["source_file"] = os.path.basename(d.path or "")
     c.phase["offset_unit"] = pc_scale(d.settings)[1] or getattr(d.settings, "lockin_unit", "V")
     c.path = copy_path(d.path)
