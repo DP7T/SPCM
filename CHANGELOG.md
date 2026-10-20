@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.4 (in testing)
+- **Phase correction after every map and line scan** (instead of autophasing the lock-in):
+  the phase is found from the whole measurement (pixels well above the noise lie on one
+  line through zero in the X–Y plane), one angle for the map / the whole series, X positive
+  at the strongest pixel. Saved as a separate copy `<name>_phased.h5` + CSV + PNG in the
+  same folder; the measurement is unchanged. A window shows the X–Y cloud and Y after the
+  correction (should be noise); optional substrate background from a box you put on the map;
+  angle can be typed. File → *Phase correction of the shown map / line…* to redo it
+
 ## 1.2.3 (2026-10-19)
 - **First pixel of each line** (step scans): the stage now stops one step before the line,
   waits there, and then steps onto the first pixel like onto any other pixel. Before, the

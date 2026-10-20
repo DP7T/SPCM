@@ -106,6 +106,12 @@ def export_csv(d):
                  f"(from the origin), {dist[-1]:.3f} µm long, {len(dist)} points, "
                  f"step {s.step * 1000:.1f} nm\n")
         fh.write(f"Photocurrent conversion: {formula} [{unit}]\n\n")
+        ph = getattr(d, "phase", None)
+        if ph:
+            fh.write(f"PHASE-CORRECTED COPY of {ph.get('source_file', '')}: photocurrent X, Y, "
+                     f"theta rotated by {ph.get('phase_deg', 0):.2f}° (X' = X cos + Y sin), "
+                     f"background subtracted: {ph.get('offset', [0, 0])} "
+                     f"{ph.get('offset_unit', '')}\n  {ph.get('message', '')}\n\n")
         fh.write("line.csv: numbers only, one row per point. Columns:\n")
         for i, c in enumerate(cols, 1):
             fh.write(f"  {i}: {c}\n")

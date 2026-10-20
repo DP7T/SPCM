@@ -78,7 +78,8 @@ def save_figure(d, ib, path, channel=0, refl_channel=2, limits=None,
     im = ax1.imshow(sig / scale, origin="lower", extent=ext, cmap="bwr",
                     vmin=lo / scale, vmax=hi / scale, interpolation="nearest",
                     aspect="equal")
-    ax1.set_title(kind, pad=10)
+    ph = getattr(d, "phase", None)
+    ax1.set_title(kind + (f" (phase {ph['phase_deg']:+.1f}°)" if ph else ""), pad=10)
     cb = fig.colorbar(im, cax=cax)
     if limits is None:
         t = hi / scale

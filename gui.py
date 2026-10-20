@@ -959,6 +959,7 @@ class MainWindow(QtWidgets.QMainWindow):
         m = self.menuBar().addMenu("&File")
         m.addAction("Open saved scan…", self.open_file)
         m.addAction("Export shown scan to CSV…", self.export_csv)
+        m.addAction("Phase correction of the shown map / line…", self.phase_shown)
         m.addAction("Save figure of shown map…", self.save_figure)
         m.addAction("Open data folder", lambda: self.open_path(self.folder.text()))
         m.addSeparator()
@@ -2158,6 +2159,7 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             self.statusBar().showMessage(f"CSV/figure export failed: {e}")
             return
+        self._auto_phase(self.line_data)
         self.statusBar().showMessage(("Line scan finished" if done else "Line scan stopped")
                                      + f" - saved {os.path.abspath(path)} + PNG and CSV")
 
@@ -3060,9 +3062,54 @@ class MainWindow(QtWidgets.QMainWindow):
             save_all(saved)
         except Exception as e:
             self.statusBar().showMessage(f"CSV/figure export failed: {e}")
+            saved = None
+        if saved is not None:
+            self._auto_phase(saved)
         self.statusBar().showMessage(("Finished" if done else "Stopped") +
                                      f" - saved {os.path.abspath(path)}"
                                      + (" + figure (PNG) and CSV files" if csv_dir else ""))
+
+    def _auto_phase(self, d, show=True):
+        """After every map / line scan: find the phase from the data and, if there is a
+        clear signal, save the rotated copy <name>_phased.h5 (+ CSV, PNG) and show it."""
+        import phase
+        if getattr(d, "phase", None):              # already a corrected copy
+            return
+        try:
+            X, Y = phase.processed_xy(d)
+            res = phase.find_phase(X, Y)
+            saved = phase.write_copy(d, res) if res.get("ok") else None
+        except Exception as e:
+            self.toast(f"Phase correction failed: {e}", "warn")
+            return
+        if saved is None:
+            self.toast("Phase correction: " + res.get("message", ""), "info")
+        if show and (saved is not None):
+            if getattr(self, "phase_dialog", None) is not None:
+                self.phase_dialog.close()
+            self.phase_dialog = PhaseDialog(self, d, res, saved)
+            self.phase_dialog.show()
+
+    def phase_shown(self):
+        """Open the phase correction for the map / line shown now."""
+        import phase
+        w = self.plot_stack.currentWidget() if self.tabs.currentWidget() is self.plot_stack \
+            else None
+        d = getattr(self, "line_data", None) if w is self.line_view else self.data
+        if d is None or not getattr(d, "path", None) or not np.isfinite(d.pc[..., 0]).any():
+            self.error("Open or measure a map or line scan first.")
+            return
+        if getattr(d, "phase", None):
+            self.error("This is already a phase-corrected copy. Open the original "
+                       "measurement to correct it again.")
+            return
+        X, Y = phase.processed_xy(d)
+        res = phase.find_phase(X, Y)
+        cp = phase.copy_path(d.path)
+        if getattr(self, "phase_dialog", None) is not None:
+            self.phase_dialog.close()
+        self.phase_dialog = PhaseDialog(self, d, res, cp if os.path.exists(cp) else None)
+        self.phase_dialog.show()
 
     def on_failed(self, tb):
         self._cleanup()
@@ -3336,3 +3383,214 @@ class ResolutionDialog(QtWidgets.QDialog):
                 os.path.basename(f) for f in files))
         except Exception as e:
             self.win.error(f"Could not save:\n{e}")
+
+
+class PhaseDialog(QtWidgets.QDialog):
+    """Phase correction after a measurement: X-Y cloud with the found line, the rotated
+    Y as a check (should be only noise), optional substrate background marked with a
+    box on the map, and the angle. The corrected data go into <name>_phased.h5 (+ CSV,
+    PNG) next to the measurement; the measurement itself is never changed."""
+
+    def __init__(self, win, d, res, saved):
+        super().__init__(win)
+        import phase
+        self.win, self.d, self.res = win, d, dict(res)
+        self.setWindowTitle("SPCM – phase correction")
+        self.resize(900, 560)
+        self.X, self.Y = phase.processed_xy(d)
+        fac, unit, _ = __import__("scanner").pc_scale(d.settings)
+        self.unit = unit or getattr(d.settings, "lockin_unit", "V")
+        st = d.settings
+        ox = st.origin_x if st.origin_x is not None else st.x_center
+        oy = st.origin_y if st.origin_y is not None else st.y_center
+        self.ux = (-1 if st.flip_x else 1) * (np.asarray(d.xs) - ox)
+        self.vy = (-1 if st.flip_y else 1) * (np.asarray(d.ys) - oy)
+        self.line = getattr(st, "scan_type", "map") == "line"
+        self.ix = np.arange(len(self.ux)) if self.line else np.argsort(self.ux)
+        self.iy = np.arange(len(self.vy)) if self.line else np.argsort(self.vy)
+        lay = QtWidgets.QVBoxLayout(self)
+        self.msg = QtWidgets.QLabel()
+        self.msg.setWordWrap(True)
+        lay.addWidget(self.msg)
+        glw = pg.GraphicsLayoutWidget()
+        lay.addWidget(glw, 1)
+        self.p1 = glw.addPlot(row=0, col=0, title="Photocurrent X–Y, every pixel")
+        self.p1.setLabel("bottom", "X", units=self.unit)
+        self.p1.setLabel("left", "Y", units=self.unit)
+        self.p1.setAspectLocked(True)
+        self.p1.showGrid(x=True, y=True, alpha=0.25)
+        self.p2 = glw.addPlot(row=0, col=1, title="Y after the correction (should be noise)")
+        if self.line:
+            self.p2.setLabel("bottom", "Distance along the line (µm)")
+            self.p2.setLabel("left", "Y after correction", units=self.unit)
+        else:
+            self.p2.setLabel("bottom", "x (µm)")
+            self.p2.setLabel("left", "y (µm)")
+            self.p2.setAspectLocked(True)
+            self.img = pg.ImageItem()
+            self.p2.addItem(self.img)
+            self.bar = pg.ColorBarItem(colorMap=pg.colormap.get("CET-D1"),
+                                       interactive=False, width=12)
+            self.bar.setImageItem(self.img, insert_in=self.p2)
+            x0, x1 = float(np.min(self.ux)), float(np.max(self.ux))
+            y0, y1 = float(np.min(self.vy)), float(np.max(self.vy))
+            w, h = max(x1 - x0, 1e-3), max(y1 - y0, 1e-3)
+            self.roi = pg.RectROI([x0, y0], [w / 4, h / 4], pen=pg.mkPen("#2e7d32", width=2))
+            self.roi.addScaleHandle([0, 0], [1, 1])
+            self.roi.setVisible(False)
+            self.p2.addItem(self.roi)
+            self.roi.sigRegionChangeFinished.connect(self.recompute)
+        row = QtWidgets.QHBoxLayout()
+        if len(st.outer_list()) > 1:
+            row.addWidget(QtWidgets.QLabel("Show"))
+            self.which = QtWidgets.QComboBox()
+            from scanner import outer_text
+            for b in st.outer_list():
+                self.which.addItem(outer_text(st, b))
+            self.which.currentIndexChanged.connect(self.redraw)
+            row.addWidget(self.which)
+        else:
+            self.which = None
+        self.bg = QtWidgets.QCheckBox("Subtract substrate background")
+        self.bg.setToolTip(
+            "Subtract the mean X, Y of the bare substrate before finding the phase. "
+            + ("Without a marked area: the weakest 30 % of the pixels." if self.line else
+               "Move / resize the green box on the right map over bare substrate."))
+        self.bg.toggled.connect(self._bg_toggled)
+        row.addWidget(self.bg)
+        row.addSpacing(16)
+        row.addWidget(QtWidgets.QLabel("Phase (°)"))
+        self.ang = QtWidgets.QDoubleSpinBox()
+        self.ang.setRange(-180, 180)
+        self.ang.setDecimals(1)
+        self.ang.setSingleStep(0.5)
+        self.ang.setKeyboardTracking(False)
+        self.ang.valueChanged.connect(self._angle_changed)
+        row.addWidget(self.ang)
+        auto = QtWidgets.QPushButton("Auto")
+        auto.setToolTip("Find the phase again from the data")
+        auto.clicked.connect(self.recompute)
+        row.addWidget(auto)
+        row.addStretch(1)
+        self.save_btn = QtWidgets.QPushButton("Save corrected copy")
+        self.save_btn.clicked.connect(self.save)
+        row.addWidget(self.save_btn)
+        self.del_btn = QtWidgets.QPushButton("No copy")
+        self.del_btn.setToolTip("Delete the corrected copy (the measurement itself stays)")
+        self.del_btn.clicked.connect(self.no_copy)
+        row.addWidget(self.del_btn)
+        lay.addLayout(row)
+        style_plots(glw, bool((win.config.get("ui", {}) or {}).get("dark", False)))
+        self.saved = saved
+        self._set_angle(self.res.get("phase_deg", 0.0))
+        self._status()
+        self.redraw()
+
+    # -- helpers
+    def _set_angle(self, v):
+        self.ang.blockSignals(True)
+        self.ang.setValue(float(v))
+        self.ang.blockSignals(False)
+
+    def _substrate_mask(self):
+        if self.line or not self.bg.isChecked():
+            return None
+        (x0, y0), (w, h) = self.roi.pos(), self.roi.size()
+        U, V = np.meshgrid(self.ux, self.vy)            # stage order [iy, ix]
+        m = (U >= x0) & (U <= x0 + w) & (V >= y0) & (V <= y0 + h)
+        return np.broadcast_to(m, self.X.shape)
+
+    def _status(self, extra=""):
+        r = self.res
+        txt = r.get("message", "")
+        if r.get("background_from"):
+            o = r.get("offset", [0, 0])
+            txt += (f"<br>Background subtracted ({r['background_from']}): "
+                    f"X {o[0]:.3g}, Y {o[1]:.3g} {self.unit}")
+        if self.saved:
+            txt += f"<br><b>Saved:</b> {os.path.basename(self.saved)} (+ CSV and PNG) " \
+                   "next to the measurement. The measurement itself is unchanged."
+        else:
+            txt += "<br>No corrected copy saved."
+        bad = not r.get("ok") or "CHECK" in r.get("message", "")
+        self.msg.setText(("<span style='color:#c62828'>" if bad else "<span>")
+                         + txt + extra + "</span>")
+
+    def _bg_toggled(self, on):
+        if not self.line:
+            self.roi.setVisible(on)
+        self.recompute()
+
+    def _angle_changed(self, v):
+        self.res = dict(self.res, phase_deg=float(v), ok=True,
+                        message=f"Phase set by hand: {v:+.1f}° (same as raising the "
+                                f"lock-in PHASE by {v:.1f}°).")
+        self._status(" <i>(not saved yet)</i>")
+        self.redraw()
+
+    def recompute(self, *_):
+        import phase
+        self.res = phase.find_phase(self.X, self.Y, self.bg.isChecked(),
+                                    self._substrate_mask())
+        if self.res.get("ok"):
+            self._set_angle(self.res["phase_deg"])
+        self._status(" <i>(not saved yet)</i>")
+        self.redraw()
+
+    def redraw(self, *_):
+        import phase
+        ib = self.which.currentIndex() if self.which is not None else 0
+        off = self.res.get("offset", (0.0, 0.0)) if self.bg.isChecked() else (0.0, 0.0)
+        phi = self.ang.value()
+        X, Y = self.X, self.Y
+        good = np.isfinite(X) & np.isfinite(Y)
+        self.p1.clear()
+        self.p1.plot(X[good], Y[good], pen=None, symbol="o", symbolSize=4,
+                     symbolBrush=pg.mkBrush(90, 120, 200, 120), symbolPen=None)
+        if np.any(good):
+            L = float(np.nanmax(np.hypot(X - off[0], Y - off[1])))
+            c, s = np.cos(np.deg2rad(phi)), np.sin(np.deg2rad(phi))
+            self.p1.plot([off[0] - L * c, off[0] + L * c], [off[1] - L * s, off[1] + L * s],
+                         pen=pg.mkPen("#e65100", width=2))
+            self.p1.plot([off[0]], [off[1]], pen=None, symbol="+", symbolSize=14,
+                         symbolBrush=pg.mkBrush("#2e7d32"), symbolPen=pg.mkPen("#2e7d32"))
+        Xr, Yr = phase.rotate(X[ib], Y[ib], phi, off)
+        if self.line:
+            self.p2.clear()
+            dist = np.asarray(self.d.xs) - self.d.xs[0]
+            self.p2.plot(dist, Yr[0], pen=pg.mkPen("#1565c0", width=2))
+            self.p2.plot(dist, Xr[0], pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine))
+        else:
+            img = Yr[np.ix_(self.iy, self.ix)]
+            m = np.nanmax(np.abs(Xr)) if np.isfinite(Xr).any() else 1.0
+            self.img.setImage(np.nan_to_num(img).T, autoLevels=False)
+            self.bar.setLevels((-m, m))         # same scale as the signal: Y should look flat
+            x0, x1 = float(self.ux[self.ix][0]), float(self.ux[self.ix][-1])
+            y0, y1 = float(self.vy[self.iy][0]), float(self.vy[self.iy][-1])
+            nx, ny = len(self.ux), len(self.vy)
+            dx = (x1 - x0) / max(nx - 1, 1) or 1.0
+            dy = (y1 - y0) / max(ny - 1, 1) or 1.0
+            self.img.setRect(QtCore.QRectF(x0 - dx / 2, y0 - dy / 2, dx * nx, dy * ny))
+
+    def save(self):
+        import phase
+        res = dict(self.res, phase_deg=self.ang.value())
+        if not self.bg.isChecked():
+            res["offset"], res["subtract_background"], res["background_from"] = [0.0, 0.0], False, ""
+        try:
+            self.saved = phase.write_copy(self.d, res)
+            self.res = res
+            self._status()
+            self.win.toast(f"Phase-corrected copy saved ({res['phase_deg']:+.1f}°)", "info")
+        except Exception as e:
+            self.win.error(f"Could not save the corrected copy:\n{e}")
+
+    def no_copy(self):
+        import phase
+        try:
+            phase.remove_copy(self.d.path)
+        except OSError as e:
+            self.win.error(f"Could not delete the copy:\n{e}")
+            return
+        self.saved = None
+        self._status()

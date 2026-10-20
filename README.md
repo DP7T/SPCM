@@ -180,6 +180,28 @@ Press **Start I–V**, the Start button on this tab. The **Plot** tab on the rig
 - `<name>_csv/iv.csv` has the same columns, numbers only.
 - `<name>.png` is the plot.
 
+## Phase correction (automatic, after every map and line scan)
+Instead of autophasing the lock-in at the strongest point, the program finds the phase from
+the finished measurement. All real photocurrent has one phase, so in the X–Y plane its pixels
+lie on one straight line through zero; noise is a round blob. The program takes the pixels
+clearly above the noise (5×), finds the direction of that line, and rotates X and Y by that
+one angle for the whole map (and for all maps of a series), with X positive at the strongest
+pixel, like autophasing there by hand.
+
+- It works on the processed photocurrent (after the SR570 / √2 conversion).
+- The result goes into a **separate copy** in the same folder: `<name>_phased.h5`, its CSV
+  folder and PNG(s). The measurement itself is never changed, and the copy keeps the raw
+  lock-in readings unrotated in `raw/`. The angle and how it was found are in
+  `info/phase_correction` and in info.txt.
+- A window shows the X–Y cloud with the line, and **Y after the correction**, on the same
+  colour scale as the signal: it should look flat (noise only). If it doesn't, the message
+  says so (background pickup, or a phase change during the scan).
+- **Subtract substrate background** (tick box): move the green box over bare substrate; its
+  mean X, Y is subtracted first. You can also type the angle, press **Auto**, then **Save
+  corrected copy**, or **No copy** to delete it.
+- If there is no clear signal, no copy is made (just a short message).
+- *File → Phase correction of the shown map / line…* opens the window again later.
+
 ## Measuring the resolution
 
 1. Measure or open a reflection map that crosses a sharp edge, such as a gold electrode. Use a step well below the spot size, ideally ≤ 100 nm.

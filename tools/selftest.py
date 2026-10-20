@@ -215,6 +215,37 @@ def _():
         li.set_sens_index(i0)
 
 
+@check("phase correction: angle, copy (raw kept), no copy for pure noise, substrate")
+def _():
+    import phase
+    from scanner import ScanSettings, ScanWorker, load
+    s = ScanSettings(x_center=-8, y_center=-6, x_size=16, y_size=12, step=1.0,
+                     serpentine=False, mode="step", origin_x=0, origin_y=0,
+                     biases=[-0.5, 0.5], sample="selftest_phase")
+    d = load(run_worker(ScanWorker(HW, s, OUT)))
+    X, Y = phase.processed_xy(d)
+    r = phase.find_phase(X, Y)
+    print("      " + r["message"])
+    assert r["ok"] and abs(r["phase_deg"] - 12.0) < 1.0, r      # simulator: 12°
+    p = phase.write_copy(d, r)
+    c = load(p)
+    assert c.phase and np.allclose(c.raw_pc, d.pc, equal_nan=True), "raw must stay unrotated"
+    Xc, Yc = phase.processed_xy(c)
+    assert np.nanstd(Yc) < 0.1 * np.nanstd(Xc), (np.nanstd(Yc), np.nanstd(Xc))
+    i = np.nanargmax(np.hypot(X, Y))
+    assert Xc.ravel()[i] > 0, "X must be positive at the strongest pixel"
+    assert os.path.isdir(os.path.splitext(p)[0] + "_csv")
+    rng = np.random.default_rng(1)
+    assert not phase.find_phase(rng.normal(size=400), rng.normal(size=400))["ok"]
+    # a constant pickup on top: found from a marked substrate area
+    bx, by = 0.3 * np.nanmax(np.abs(X)), -0.2 * np.nanmax(np.abs(X))
+    quiet = np.hypot(X, Y) < np.nanquantile(np.hypot(X, Y), 0.2)
+    r2 = phase.find_phase(X + bx, Y + by, True, quiet)
+    assert abs(r2["offset"][0] - bx) < 0.1 * abs(bx) and abs(r2["phase_deg"] - 12) < 2, r2
+    phase.remove_copy(d.path)
+    assert not os.path.exists(p)
+
+
 @check("stage: a move that stops off target is retried once, then refused")
 def _():
     import instruments
@@ -454,6 +485,17 @@ if HAVE_QT:
             pump(0.2)
         assert w.thread is None, "map scan did not finish"
         shot("map")
+        # the phase correction ran by itself after the scan
+        pd = getattr(w, "phase_dialog", None)
+        assert pd is not None and pd.saved and os.path.exists(pd.saved), "no phased copy"
+        print(f"      phase found after the map: {pd.ang.value():+.1f}° (simulation: +12°)")
+        pump(0.5)
+        pd.grab().save(os.path.join(OUT, "screen_phase_dialog.png"))
+        pd.bg.setChecked(True)                    # substrate box on the map
+        pump(0.5)
+        pd.grab().save(os.path.join(OUT, "screen_phase_dialog_substrate.png"))
+        pd.save()
+        pd.close()
         if getattr(w, "cam_tab", None) is not None:
             w.tabs.setCurrentWidget(w.cam_tab)
             pump(0.5)

@@ -36,6 +36,7 @@ the real hardware and report back with screenshots. Write in plain language for 
 | `naming.py` | measurement names from a pattern, one folder per measurement |
 | `iv.py` | quick DC I–V: `IVSettings`, `bias_points()` (cycles 0→max→min→0), `IVData` (h5/CSV/PNG), `IVWorker` |
 | `resolution.py` | spot size from an edge on the reflection map: profile, erf fit (no scipy), slant correction, save |
+| `phase.py` | phase correction after the measurement: `find_phase`, `rotate`, `write_copy` (`<name>_phased.h5`) |
 | `figures.py` | publication-style PNG (matplotlib Agg) |
 | `autofocus.py` | z sweep that maximizes the camera sharpness |
 | `config.default.yaml` | default settings. `config.yaml` is the user's copy, created on the first start. It is git-ignored and never overwritten. |
@@ -92,6 +93,7 @@ the real hardware and report back with screenshots. Write in plain language for 
   - **No camera images in the h5.**
   - `scanner.load()` must keep reading old files.
 - **Fly scans never invent data:** pixels without a reading stay NaN (line re-scanned once first; count in `map_info[...]['fly_empty_pixels']`). Stop halts the stage (`_halt_stage`).
+- **Phase correction (1.2.4):** automatic after every map / line scan (`MainWindow._auto_phase`, `phase.py`). One angle for the whole file (all maps of a series; the user expects one phase for all pixels), found from pixels > 5× noise as the direction of the X–Y line through zero (second moments), sign: X' > 0 at the strongest pixel. Done on the **processed** photocurrent. Written to a **separate copy** `<name>_phased.h5` (+ `_phased_csv/`, `_phased_*.png`) in the same folder; `raw/*` there stays unrotated (`ScanData.raw_pc`), `info/phase_correction` holds angle, offset, noise, message. No copy without a clear signal. Optional substrate background: user-marked box on the map (`PhaseDialog`), else the weakest 30 % of pixels. The lock-in phase is never changed.
 - **After each scan:** CSV export and the PNG figure are written automatically. Stop & discard deletes them.
 
 **GUI**

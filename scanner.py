@@ -283,6 +283,8 @@ class ScanData:
         self.power_lock = {}    # target, start amplitude
         self.started = time.strftime("%Y-%m-%dT%H:%M:%S")
         self.completed = False
+        self.raw_pc = None      # phase-corrected copy: the unrotated lock-in readings
+        self.phase = None       # phase-corrected copy: angle, offset, ... (phase.py)
 
     def save(self, path):
         """Tidy file: one group per map with plain 2-D images, ready to plot.
@@ -330,6 +332,15 @@ class ScanData:
             for k, v in s.conditions.items():
                 exp.attrs[k] = str(v)
             exp.attrs["notes"] = s.notes
+            if self.phase:
+                ph = info.create_group("phase_correction")
+                for k, v in self.phase.items():
+                    ph.attrs[k] = v if not isinstance(v, (list, dict)) else json.dumps(v)
+                ph.attrs["note"] = ("photocurrent_* = processed photocurrent rotated by "
+                                    "phase_deg (X' = X cos + Y sin, after subtracting offset); "
+                                    "raw/* = lock-in readings as measured, NOT rotated")
+                f.attrs["phase_corrected_deg"] = self.phase.get("phase_deg", 0.0)
+            raw = self.raw_pc if self.raw_pc is not None else self.pc
             olabel, ounit = outer_name(s)
             is_bias = getattr(s, "outer", "bias") == "bias"
             for ib, b in enumerate(s.outer_list()):
@@ -361,7 +372,7 @@ class ScanData:
                                          data=self.refl[ib, :, :, c][view], compression="gzip")
                     d.attrs["unit"] = "V" if c < 3 else "deg"
                     g.create_dataset(f"raw/photocurrent_{nm}",
-                                     data=self.pc[ib, :, :, c][view], compression="gzip")
+                                     data=raw[ib, :, :, c][view], compression="gzip")
                     g.create_dataset(f"raw/reflection_{nm}",
                                      data=self.refl[ib, :, :, c][view], compression="gzip")
                 g["photocurrent_X"].attrs["conversion"] = formula
@@ -431,6 +442,12 @@ def export_csv(d):
         s = d.settings
         fh.write(f"Sample: {s.sample}\nStarted: {d.started}\nCompleted: {d.completed}\n")
         fh.write(f"Photocurrent conversion: {formula} [{unit}]\n")
+        ph = getattr(d, "phase", None)
+        if ph:
+            fh.write(f"PHASE-CORRECTED COPY of {ph.get('source_file', '')}: photocurrent X, Y, "
+                     f"theta rotated by {ph.get('phase_deg', 0):.2f}° (X' = X cos + Y sin), "
+                     f"background subtracted: {ph.get('offset', [0, 0])} {ph.get('offset_unit', '')}"
+                     f"\n  {ph.get('message', '')}\n")
         fh.write("\nCSV files: plain matrices of numbers. Row = y, column = x, first row "
                  "= lowest y (as on screen). Photocurrent in "
                  f"{unit}, reflection in V, theta in degrees.\n")
@@ -522,6 +539,17 @@ def load(path):
                                                    a[:, 1]]).tolist()
             d.power_lock = json.loads(info.attrs.get("laser_power_setting",
                                                      info.attrs.get("power_lock", "{}")))
+            if "phase_correction" in info:     # phase-corrected copy: show the rotated data
+                ph = info["phase_correction"]
+                d.phase = {k: (v.item() if hasattr(v, "item") else v)
+                           for k, v in ph.attrs.items()}
+                fac = pc_scale(d.settings)[0]
+                d.raw_pc = d.pc.copy()
+                for ib, m in enumerate(maps):
+                    g = f[m]
+                    for c, ch in enumerate(CHANNELS):
+                        nm = ch if c < 3 else "theta_deg"
+                        d.pc[ib, :, :, c] = g[f"photocurrent_{nm}"][()] / (fac if c < 3 else 1)
         else:                                             # ---- older files
             d = ScanData(_settings_from(json.loads(f.attrs["settings"])),
                          json.loads(f.attrs["hardware"]))
