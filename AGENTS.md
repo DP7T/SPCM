@@ -3,6 +3,7 @@
 Read this before changing the code. It describes the app, how it is organized, and the decisions the
 user has already made. Do not undo these decisions without asking. For the history of the requests, see
 [HOW_IT_WAS_BUILT.md](HOW_IT_WAS_BUILT.md). For the user-facing manual, see [README.md](README.md).
+Ideas the user has agreed on but that are not built yet are in [IDEAS.md](IDEAS.md).
 
 ## What it is
 
