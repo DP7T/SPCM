@@ -2095,11 +2095,15 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         if self.cursor_dialog is None:
             self.cursor_dialog = CursorDialog(self)
-        pt = tuple(self.cur_pt[0].pos()) if (pt_on and self.cur_pt) else None
+        pt = None
+        if pt_on and self.cur_pt:
+            q = self.cur_pt[0].pos()
+            pt = (float(q.x()), float(q.y()))
         ln = None
         if ln_on and self.cur_ln:
             r = self.cur_ln[0]
-            ln = [tuple(r.mapToParent(h.pos())) for h in r.getHandles()]
+            ln = [(float(q.x()), float(q.y()))
+                  for q in (r.mapToParent(h.pos()) for h in r.getHandles())]
         self.cursor_dialog.show_cursors(self.data, pt, ln)
         if not self.cursor_dialog.isVisible():
             self.cursor_dialog.show()
