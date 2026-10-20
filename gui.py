@@ -3419,7 +3419,9 @@ class PhaseDialog(QtWidgets.QDialog):
         self.p1.setLabel("left", "Y", units=self.unit)
         self.p1.setAspectLocked(True)
         self.p1.showGrid(x=True, y=True, alpha=0.25)
-        self.p2 = glw.addPlot(row=0, col=1, title="Y after the correction (should be noise)")
+        self.p2 = glw.addPlot(row=0, col=1,
+                              title="Y after the correction (own colour scale: should "
+                                    "look like noise, no pattern)")
         if self.line:
             self.p2.setLabel("bottom", "Distance along the line (µm)")
             self.p2.setLabel("left", "Y after correction", units=self.unit)
@@ -3435,7 +3437,17 @@ class PhaseDialog(QtWidgets.QDialog):
             x0, x1 = float(np.min(self.ux)), float(np.max(self.ux))
             y0, y1 = float(np.min(self.vy)), float(np.max(self.vy))
             w, h = max(x1 - x0, 1e-3), max(y1 - y0, 1e-3)
-            self.roi = pg.RectROI([x0, y0], [w / 4, h / 4], pen=pg.mkPen("#2e7d32", width=2))
+            # start the box on the quietest corner (most likely bare substrate)
+            R = np.nanmean(np.hypot(self.X, self.Y), axis=0)        # [iy, ix]
+            best, pos = np.inf, (x0, y0)
+            for cx in (x0, x1 - w / 4):
+                for cy in (y0, y1 - h / 4):
+                    m = ((self.ux[None, :] >= cx) & (self.ux[None, :] <= cx + w / 4)
+                         & (self.vy[:, None] >= cy) & (self.vy[:, None] <= cy + h / 4))
+                    v = np.nanmean(R[m]) if np.isfinite(R[m]).any() else np.inf
+                    if v < best:
+                        best, pos = v, (cx, cy)
+            self.roi = pg.RectROI(list(pos), [w / 4, h / 4], pen=pg.mkPen("#2e7d32", width=2))
             self.roi.addScaleHandle([0, 0], [1, 1])
             self.roi.setVisible(False)
             self.p2.addItem(self.roi)
@@ -3562,9 +3574,12 @@ class PhaseDialog(QtWidgets.QDialog):
             self.p2.plot(dist, Xr[0], pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine))
         else:
             img = Yr[np.ix_(self.iy, self.ix)]
-            m = np.nanmax(np.abs(Xr)) if np.isfinite(Xr).any() else 1.0
+            m = np.nanmax(np.abs(Yr)) if np.isfinite(Yr).any() else 1.0
             self.img.setImage(np.nan_to_num(img).T, autoLevels=False)
-            self.bar.setLevels((-m, m))         # same scale as the signal: Y should look flat
+            self.bar.setLevels((-m, m))         # its own scale: noise or a pattern?
+            sx = np.nanmax(np.abs(Xr)) if np.isfinite(Xr).any() else np.nan
+            self.p2.setTitle(f"Y after the correction (own scale, max {m / sx * 100:.0f} % of X):"
+                             " should look like noise")
             x0, x1 = float(self.ux[self.ix][0]), float(self.ux[self.ix][-1])
             y0, y1 = float(self.vy[self.iy][0]), float(self.vy[self.iy][-1])
             nx, ny = len(self.ux), len(self.vy)

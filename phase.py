@@ -64,10 +64,14 @@ def find_phase(X, Y, subtract_background=False, substrate=None):
                               "weakest 30 % of the pixels") if subtract_background else ""
     x, y = X - off[0], Y - off[1]
     r = np.hypot(x, y)
-    rq = r[r <= np.quantile(r, QUIET_FRACTION)]
-    # noise per component from the weakest pixels: for pure noise, the mean of R^2
-    # over the lowest 30 % is 0.333 sigma^2 (Rayleigh distribution)
-    sigma = float(np.sqrt(np.mean(rq ** 2) / 0.333)) if rq.size else np.nan
+    if subtract_background and area is sub:
+        # noise = scatter of X, Y on the marked substrate
+        sigma = float(np.sqrt((np.var(x[sub]) + np.var(y[sub])) / 2))
+    else:
+        rq = r[r <= np.quantile(r, QUIET_FRACTION)]
+        # noise per component from the weakest pixels: for pure noise, the mean of R^2
+        # over the lowest 30 % is 0.333 sigma^2 (Rayleigh distribution)
+        sigma = float(np.sqrt(np.mean(rq ** 2) / 0.333)) if rq.size else np.nan
     sig = r > SIGNAL_SIGMA * sigma
     n = int(sig.sum())
     out.update(offset=list(off), noise=sigma, n_signal=n)
