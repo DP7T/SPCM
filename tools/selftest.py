@@ -25,6 +25,10 @@ os.makedirs(OUT, exist_ok=True)
 FAILED = []
 
 
+def phase_wrap(a):
+    return (a + 180.0) % 360.0 - 180.0
+
+
 def check(name):
     def deco(fn):
         t = time.time()
@@ -266,6 +270,36 @@ def _():
     r6 = phase.find_phase(np.stack([X[0], X3]), np.stack([Y[0], Y3]))
     assert r6["inconsistent_maps"] and "CHECK" in r6["message"], r6["message"]
     print("      spike ignored, sign follows the last angle, series checked")
+
+
+@check("cursors: nearest pixel at a point and along a line, all maps, raw + corrected, CSV")
+def _():
+    import cursors
+    import phase
+    from scanner import ScanSettings, ScanWorker, load, pc_scale
+    s = ScanSettings(x_center=-8, y_center=-6, x_size=16, y_size=12, step=1.0,
+                     serpentine=False, mode="step", origin_x=0, origin_y=0,
+                     biases=[-0.5, 0.5], sample="selftest_cursor")
+    d = load(run_worker(ScanWorker(HW, s, OUT)))
+    fac = pc_scale(d.settings)[0]
+    u, v, ix, iy = cursors.axes(d)
+    r = cursors.point(d, u[3] + 0.2, v[5] - 0.3)            # nearest: pixel (3, 5)
+    assert r["u"] == u[3] and r["v"] == v[5], (r["u"], r["v"])
+    assert np.allclose(r["pc"][:, 0], d.pc[:, iy[5], ix[3], 0] * fac, equal_nan=True)
+    assert r["pc"].shape == (2, 4) and r["corr"] is None
+    cp = phase.write_copy(d, phase.find_phase(*phase.processed_xy(d)))
+    r = cursors.point(d, u[3], v[5])
+    if os.path.exists(cp):                       # (not with the test's in-memory h5py)
+        assert r["corr"] is not None and r["corr"].shape == (2, 2), r["corr"]
+    ln = cursors.line(d, (u[0], v[4]), (u[-1], v[4]))       # along one row
+    assert len(ln["distance"]) == len(u), len(ln["distance"])
+    assert np.allclose(ln["pc"][0][:, 0], d.pc[0, iy[4], ix, 0] * fac, equal_nan=True)
+    for kind, res in (("point", r), ("line", ln)):
+        p = cursors.save(d, res, kind)
+        cols = open(p[:-4] + "_info.txt", encoding="utf-8").read().count("\n  ")
+        first = open(p).readline().strip().split(",")
+        assert len(first) == cols, (kind, len(first), cols)
+    print(f"      point and line read; line has {len(ln['distance'])} points; CSV columns match info.txt")
 
 
 @check("stage: a move that stops off target is retried once, then refused")
@@ -516,8 +550,36 @@ if HAVE_QT:
         pd.bg.setChecked(True)                    # substrate box on the map
         pump(0.5)
         pd.grab().save(os.path.join(OUT, "screen_phase_dialog_substrate.png"))
+        pd.view.setCurrentIndex(1)                # phase-lag view
+        pump(0.5)
+        pd.grab().save(os.path.join(OUT, "screen_phase_lag.png"))
         pd.save()
         pd.close()
+        # per sample: the total phase is remembered; another lock-in phase on the same
+        # sample gives the matching correction with the same sign, no "FAR" warning
+        tot = w._phase_totals().get(w.sample.text() or "sample")
+        assert tot is not None, "total phase not remembered"
+        HW.lockin_pc.ph_deg = 50.0
+        w.start()
+        t0 = time.time()
+        while w.thread is not None and time.time() - t0 < 120:
+            pump(0.2)
+        pd2 = w.phase_dialog
+        a2 = pd2.ang.value()
+        print(f"      lock-in phase 50°: correction {a2:+.1f}° (total {50 + a2:.1f}°, "
+              f"before {tot:.1f}°)")
+        assert abs(phase_wrap(50 + a2 - tot)) < 3, (a2, tot)
+        assert "FAR" not in pd2.res.get("message", ""), pd2.res.get("message")
+        pd2.close()
+        HW.lockin_pc.ph_deg = 0.0
+        # cursors on the map
+        w.cpt_btn.setChecked(True)
+        w.cln_btn.setChecked(True)
+        pump(0.8)
+        assert w.cursor_dialog is not None and w.cursor_dialog.rp is not None
+        shot("map_cursors")
+        w.cursor_dialog.grab().save(os.path.join(OUT, "screen_cursor_dialog.png"))
+        w.cursor_dialog.close()
         if getattr(w, "cam_tab", None) is not None:
             w.tabs.setCurrentWidget(w.cam_tab)
             pump(0.5)

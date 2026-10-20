@@ -850,13 +850,25 @@ class MainWindow(QtWidgets.QMainWindow):
             "Drag the side handle to average over a wider band.")
         self.res_btn.toggled.connect(self.toggle_resolution)
         bar.addWidget(self.res_btn)
-        # the three toggle buttons stay as state holders, the user sees one menu
-        for b_ in (self.frame_btn, self.line_btn, self.res_btn):
+        # cursors for reading values (point / line), shown on both maps
+        self.cur_pt, self.cur_ln, self.cursor_dialog = [], [], None
+        self.cpt_btn = QtWidgets.QPushButton("Point cursor")
+        self.cpt_btn.setCheckable(True)
+        self.cpt_btn.toggled.connect(self.toggle_cursor_point)
+        self.cln_btn = QtWidgets.QPushButton("Line cursor")
+        self.cln_btn.setCheckable(True)
+        self.cln_btn.toggled.connect(self.toggle_cursor_line)
+        bar.addWidget(self.cpt_btn)
+        bar.addWidget(self.cln_btn)
+        # the toggle buttons stay as state holders, the user sees one menu
+        for b_ in (self.frame_btn, self.line_btn, self.res_btn, self.cpt_btn, self.cln_btn):
             b_.setVisible(False)
         self.draw_btn = self._draw_menu([
             ("Scan frame (move, resize, rotate)", self.frame_btn),
             ("Line to scan along", self.line_btn),
-            ("Resolution line (reflection map)", self.res_btn)])
+            ("Resolution line (reflection map)", self.res_btn),
+            ("Point cursor (read the values)", self.cpt_btn),
+            ("Line cursor (read along a line)", self.cln_btn)])
         bar.insertWidget(0, self.draw_btn)
         self.use_frame_btn.setVisible(False)
         self.use_line_btn.setVisible(False)
@@ -870,7 +882,10 @@ class MainWindow(QtWidgets.QMainWindow):
             "• Draw ▸ Line to scan along: drag its two ends, then 'Scan this line'. Step, "
             "timing and series come from the Map tab.\n"
             "• Draw ▸ Resolution line: put it across a sharp edge on the reflection map; the "
-            "spot size (FWHM) is fitted."))
+            "spot size (FWHM) is fitted.\n"
+            "• Draw ▸ Point cursor / Line cursor: read the measured values (nearest pixel) at a "
+            "point or along a line, on both maps, for every map of a series; raw and "
+            "phase-corrected; Save writes CSV next to the measurement."))
 
         self.tabs = QtWidgets.QTabWidget()
         # the drawing tools sit next to the tab names, so nothing jumps when they hide
@@ -1191,7 +1206,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._save_setting("power_lock", "enabled", bool(on))
 
     def _save_setting(self, section, key, value):
-        """Write one value to config.yaml so it is remembered next time."""
+        """Write one value to config.yaml so it is remembered next time (and keep the
+        running window's copy of the settings up to date)."""
+        sec = self.config.get(section)
+        if not isinstance(sec, dict):
+            sec = self.config[section] = {}
+        sec[key] = value
         if not self.config_path:
             return
         try:
@@ -1446,6 +1466,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cam_flipx.toggled.connect(self._cam_flip)
         self.cam_flipy.toggled.connect(self._cam_flip)
         self.map_sel.currentIndexChanged.connect(self.update_camera)
+        self.map_sel.currentIndexChanged.connect(lambda *_: self._cursor_update())
         self.cam_plot.scene().sigMouseClicked.connect(self._cam_clicked)
         self._cam_stage = None              # stage position the overlays belong to
         self.cam_track = QtCore.QTimer(self)
@@ -2008,6 +2029,81 @@ class MainWindow(QtWidgets.QMainWindow):
         ix, iy = np.argsort(u), np.argsort(v)
         return u[ix], v[iy], ix, iy
 
+    # ---------------------------------------------------------------- cursors
+    def _mirror(self, items, update):
+        """Keep the same cursor on both maps."""
+        a, b = items
+
+        def sync(src, dst):
+            if self._roi_sync:
+                return
+            self._roi_sync = True
+            if hasattr(src, "getState"):
+                dst.setState(src.getState())
+            else:
+                dst.setPos(src.pos())
+            self._roi_sync = False
+            update()
+        sig = "sigRegionChanged" if hasattr(a, "sigRegionChanged") else "sigPositionChanged"
+        getattr(a, sig).connect(lambda *_: sync(a, b))
+        getattr(b, sig).connect(lambda *_: sync(b, a))
+
+    def toggle_cursor_point(self, on):
+        if on and self.data is None:
+            self.cpt_btn.setChecked(False)
+            self.error("Open or measure a map first.")
+            return
+        if on and not self.cur_pt:
+            u, v, _, _ = self._view_axes(self.data)
+            c = (float(np.median(u)), float(np.median(v)))
+            for p in (self.pc_panel, self.r_panel):
+                t = pg.TargetItem(pos=c, size=16, movable=True,
+                                  pen=pg.mkPen("#ff6d00", width=2), symbol="crosshair")
+                p.plot.addItem(t)
+                self.cur_pt.append(t)
+            self._mirror(self.cur_pt, self._cursor_update)
+        for t in self.cur_pt:
+            t.setVisible(on)
+        self._cursor_update()
+
+    def toggle_cursor_line(self, on):
+        if on and self.data is None:
+            self.cln_btn.setChecked(False)
+            self.error("Open or measure a map first.")
+            return
+        if on and not self.cur_ln:
+            u, v, _, _ = self._view_axes(self.data)
+            a = (u[0] + (u[-1] - u[0]) * 0.2, v[0] + (v[-1] - v[0]) * 0.3)
+            b = (u[0] + (u[-1] - u[0]) * 0.8, v[0] + (v[-1] - v[0]) * 0.7)
+            for p in (self.pc_panel, self.r_panel):
+                r = pg.LineSegmentROI([a, b], pen=pg.mkPen("#ff6d00", width=2),
+                                      hoverPen=pg.mkPen("#00e5ff", width=2))
+                p.plot.addItem(r)
+                self.cur_ln.append(r)
+            self._mirror(self.cur_ln, self._cursor_update)
+        for r in self.cur_ln:
+            r.setVisible(on)
+        self._cursor_update()
+
+    def _cursor_update(self):
+        pt_on, ln_on = self.cpt_btn.isChecked(), self.cln_btn.isChecked()
+        if not (pt_on or ln_on):
+            if self.cursor_dialog is not None:
+                self.cursor_dialog.hide()
+            return
+        if self.data is None:
+            return
+        if self.cursor_dialog is None:
+            self.cursor_dialog = CursorDialog(self)
+        pt = tuple(self.cur_pt[0].pos()) if (pt_on and self.cur_pt) else None
+        ln = None
+        if ln_on and self.cur_ln:
+            r = self.cur_ln[0]
+            ln = [tuple(r.mapToParent(h.pos())) for h in r.getHandles()]
+        self.cursor_dialog.show_cursors(self.data, pt, ln)
+        if not self.cursor_dialog.isVisible():
+            self.cursor_dialog.show()
+
     # ---------------------------------------------------------------- line scans
     def toggle_line(self, on):
         if on and self.data is None:
@@ -2094,6 +2190,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self._switch_reminder("map"):     # lock-in measurement
             return
         self.refresh_lockins()
+        self._phase_hint(s.sample)
         self.remember_experiment()
         self.worker = ScanWorker(self.hw, s, self.folder.text() or "data",
                                  self.config.get("power_lock", {}) or {},
@@ -2740,6 +2837,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.error(f"Could not read the stage position:\n{e}")
             return
         self.refresh_lockins()
+        self._phase_hint(s.sample)
         self.remember_experiment()
         self.remember_scan(s)
         self.worker = ScanWorker(self.hw, s, self.folder.text() or "data",
@@ -2953,9 +3051,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _setup_views(self):
         d = self.data
-        for r in self.rois + self.res_rois + self.line_rois:
+        for r in self.rois + self.res_rois + self.line_rois + self.cur_pt + self.cur_ln:
             r.scene() and r.scene().removeItem(r)
         self.rois, self.res_rois, self.line_rois = [], [], []
+        self.cur_pt, self.cur_ln = [], []
+        for b_ in (self.cpt_btn, self.cln_btn):      # new map: cursors start again
+            if b_.isChecked():
+                b_.setChecked(False)
         if self.line_btn.isChecked():
             self.line_btn.setChecked(False)
         if self.res_btn.isChecked():
@@ -3075,6 +3177,7 @@ class MainWindow(QtWidgets.QMainWindow):
             saved = None
         if saved is not None:
             self._auto_phase(saved)
+        self._cursor_update()
         self.statusBar().showMessage(("Finished" if done else "Stopped") +
                                      f" - saved {os.path.abspath(path)}"
                                      + (" + figure (PNG) and CSV files" if csv_dir else ""))
@@ -3087,12 +3190,13 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         try:
             X, Y = phase.processed_xy(d)
-            ref = self._phase_ref()
-            res = phase.find_phase(X, Y, ref_deg=ref)
+            ref = self._phase_ref(d)
+            res = phase.find_phase(X, Y, ref_deg=ref, ref_what="this sample")
             res["ref_used"] = ref
+            phase.add_totals(res, d)
             saved = phase.write_copy(d, res) if res.get("ok") else None
             if saved:
-                self._save_setting("phase", "last_deg", float(res["phase_deg"]))
+                self._remember_phase(d, res)
         except Exception as e:
             self.toast(f"Phase correction failed: {e}", "warn")
             return
@@ -3104,10 +3208,42 @@ class MainWindow(QtWidgets.QMainWindow):
             self.phase_dialog = PhaseDialog(self, d, res, saved)
             self.phase_dialog.show()
 
-    def _phase_ref(self):
-        """The angle used last time (sign convention for the next file), or None."""
-        v = (self.config.get("phase", {}) or {}).get("last_deg")
-        return float(v) if v is not None else None
+    def _phase_totals(self):
+        return dict((self.config.get("phase", {}) or {}).get("by_sample", {}) or {})
+
+    def _phase_ref(self, d):
+        """The correction this sample needed last time, converted to the lock-in phase
+        of this file: total phase (lock-in + correction) remembered per sample name,
+        minus this file's lock-in phase. None for a new sample or an old file."""
+        import phase
+        total = self._phase_totals().get(str(d.settings.sample))
+        lp = phase.lockin_phase(d)
+        if total is None or lp is None:
+            return None
+        return float(phase._wrap(float(total) - lp))
+
+    def _remember_phase(self, d, res):
+        if res.get("total_phase_deg") is None:
+            return
+        t = self._phase_totals()
+        t[str(d.settings.sample)] = round(float(res["total_phase_deg"]), 2)
+        self._save_setting("phase", "by_sample", t)
+
+    def _phase_hint(self, sample):
+        """At the start: tell how this sample was phased last time (the lock-in is only
+        read; the user sets it by hand if wanted)."""
+        import phase
+        total = self._phase_totals().get(str(sample))
+        now = getattr(self, "_phase_now", None)
+        if total is None or now is None:
+            return
+        need = float(phase._wrap(float(total) - now))
+        if abs(need) > 5:
+            self.toast(f"{sample}: last time the total phase was {float(total):.1f}°. The "
+                       f"lock-in is at {now:.1f}°, so the correction will be about "
+                       f"{need:+.1f}°. To start like last time, set the lock-in PHASE to "
+                       f"{float(total):.1f}° (optional - the correction works either way).",
+                       "info")
 
     def phase_shown(self):
         """Open the phase correction for the map / line shown now."""
@@ -3123,7 +3259,10 @@ class MainWindow(QtWidgets.QMainWindow):
                        "measurement to correct it again.")
             return
         X, Y = phase.processed_xy(d)
-        res = phase.find_phase(X, Y, ref_deg=self._phase_ref())
+        ref = self._phase_ref(d)
+        res = phase.find_phase(X, Y, ref_deg=ref, ref_what="this sample")
+        res["ref_used"] = ref
+        phase.add_totals(res, d)
         cp = phase.copy_path(d.path)
         if getattr(self, "phase_dialog", None) is not None:
             self.phase_dialog.close()
@@ -3415,7 +3554,7 @@ class PhaseDialog(QtWidgets.QDialog):
         import phase
         self.win, self.d, self.res = win, d, dict(res)
         # the angle remembered BEFORE this file (the sign convention to follow)
-        self.ref = res["ref_used"] if "ref_used" in res else win._phase_ref()
+        self.ref = res["ref_used"] if "ref_used" in res else win._phase_ref(d)
         self.setWindowTitle("SPCM – phase correction")
         self.resize(900, 560)
         self.X, self.Y = phase.processed_xy(d)
@@ -3474,6 +3613,13 @@ class PhaseDialog(QtWidgets.QDialog):
             self.p2.addItem(self.roi)
             self.roi.sigRegionChangeFinished.connect(self.recompute)
         row = QtWidgets.QHBoxLayout()
+        self.view = QtWidgets.QComboBox()
+        self.view.addItems(["Y after the correction", "Phase lag of each pixel (°)"])
+        self.view.setToolTip("Phase lag: how many degrees each pixel's signal is behind / "
+                             "ahead of the common phase (only where the signal is clear). "
+                             "A feature with a different lag responds with a different delay.")
+        self.view.currentIndexChanged.connect(self.redraw)
+        row.addWidget(self.view)
         if len(st.outer_list()) > 1:
             row.addWidget(QtWidgets.QLabel("Show"))
             self.which = QtWidgets.QComboBox()
@@ -3512,6 +3658,20 @@ class PhaseDialog(QtWidgets.QDialog):
         self.del_btn.setToolTip("Delete the corrected copy (the measurement itself stays)")
         self.del_btn.clicked.connect(self.no_copy)
         row.addWidget(self.del_btn)
+        row.addWidget(win._help_btn(
+            "Phase correction",
+            "All real photocurrent has (nearly) one phase, so in the X–Y plot its pixels lie "
+            "on one line through zero. The program finds that line from the pixels well above "
+            "the noise and rotates X and Y by its angle - the same as turning the lock-in "
+            "PHASE, but afterwards. One angle for the whole map / series.\n\n"
+            "Nothing is lost: R stays the same, and the raw readings are kept. If a feature "
+            "is 1.5° away from the common phase, 2.6 % of it shows up in Y (sin 1.5°) and X "
+            "keeps 99.97 % of it (cos 1.5°). That is why you can still recognise strong "
+            "features in Y: it shows which features respond with a slightly different delay "
+            "('Phase lag' view).\n\n"
+            "Sign: the same as last time for this sample (the total phase = lock-in PHASE + "
+            "correction is remembered per sample name); for a new sample, most of the signal "
+            "positive. Strong pixels whose phase doesn't fit (spikes) are ignored (red ×)."))
         lay.addLayout(row)
         style_plots(glw, bool((win.config.get("ui", {}) or {}).get("dark", False)))
         self.saved = saved
@@ -3564,7 +3724,9 @@ class PhaseDialog(QtWidgets.QDialog):
     def recompute(self, *_):
         import phase
         self.res = phase.find_phase(self.X, self.Y, self.bg.isChecked(),
-                                    self._substrate_mask(), ref_deg=self.ref)
+                                    self._substrate_mask(), ref_deg=self.ref,
+                                    ref_what="this sample")
+        phase.add_totals(self.res, self.d)
         if self.res.get("ok"):
             self._set_angle(self.res["phase_deg"])
         self._status(" <i>(not saved yet)</i>")
@@ -3592,19 +3754,32 @@ class PhaseDialog(QtWidgets.QDialog):
             self.p1.plot([off[0]], [off[1]], pen=None, symbol="+", symbolSize=14,
                          symbolBrush=pg.mkBrush("#2e7d32"), symbolPen=pg.mkPen("#2e7d32"))
         Xr, Yr = phase.rotate(X[ib], Y[ib], phi, off)
+        lagv = self.view.currentIndex() == 1
+        if lagv:
+            Yr = phase.lag_map(X[ib], Y[ib], phi, off, self.res.get("noise"))
         if self.line:
             self.p2.clear()
             dist = np.asarray(self.d.xs) - self.d.xs[0]
             self.p2.plot(dist, Yr[0], pen=pg.mkPen("#1565c0", width=2))
-            self.p2.plot(dist, Xr[0], pen=pg.mkPen((150, 150, 150), width=1, style=QtCore.Qt.DashLine))
+            if not lagv:
+                self.p2.plot(dist, Xr[0], pen=pg.mkPen((150, 150, 150), width=1,
+                                                       style=QtCore.Qt.DashLine))
+            self.p2.setLabel("left", "Phase lag (°)" if lagv else "Y after correction",
+                             units="" if lagv else self.unit)
         else:
             img = Yr[np.ix_(self.iy, self.ix)]
             m = np.nanmax(np.abs(Yr)) if np.isfinite(Yr).any() else 1.0
             self.img.setImage(np.nan_to_num(img), autoLevels=False)   # row-major
             self.bar.setLevels((-m, m))         # its own scale: noise or a pattern?
-            sx = np.nanmax(np.abs(Xr)) if np.isfinite(Xr).any() else np.nan
-            self.p2.setTitle(f"Y after the correction (own scale, max {m / sx * 100:.0f} % of X):"
-                             " should look like noise")
+            if lagv:
+                f = next((mi.get("chop_freq_Hz") for mi in (self.d.map_info or [])
+                          if mi and mi.get("chop_freq_Hz")), None)
+                us = f" - 1° = {1e6 / 360 / f:.2g} µs at {f:.0f} Hz" if f else ""
+                self.p2.setTitle(f"Phase lag of each pixel (°, max ±{m:.1f}°){us}")
+            else:
+                sx = np.nanmax(np.abs(Xr)) if np.isfinite(Xr).any() else np.nan
+                self.p2.setTitle(f"Y after the correction (own scale, max {m / sx * 100:.0f} % "
+                                 "of X): noise, or features with a slightly different phase")
             x0, x1 = float(self.ux[self.ix][0]), float(self.ux[self.ix][-1])
             y0, y1 = float(self.vy[self.iy][0]), float(self.vy[self.iy][-1])
             nx, ny = len(self.ux), len(self.vy)
@@ -3620,7 +3795,8 @@ class PhaseDialog(QtWidgets.QDialog):
         try:
             self.saved = phase.write_copy(self.d, res)
             self.res = res
-            self.win._save_setting("phase", "last_deg", float(res["phase_deg"]))
+            phase.add_totals(res, self.d)
+            self.win._remember_phase(self.d, res)
             self._status()
             self.win.toast(f"Phase-corrected copy saved ({res['phase_deg']:+.1f}°)", "info")
         except Exception as e:
@@ -3635,3 +3811,129 @@ class PhaseDialog(QtWidgets.QDialog):
             return
         self.saved = None
         self._status()
+
+
+class CursorDialog(QtWidgets.QDialog):
+    """Values under the point cursor and along the line cursor (nearest measured pixel),
+    for every map of a series; uncorrected and phase-corrected photocurrent."""
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.win = win
+        self.setWindowTitle("SPCM – cursor values")
+        self.resize(760, 560)
+        lay = QtWidgets.QVBoxLayout(self)
+        self.text = QtWidgets.QLabel("")
+        self.text.setWordWrap(True)
+        self.text.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        lay.addWidget(self.text)
+        self.glw = pg.GraphicsLayoutWidget()
+        lay.addWidget(self.glw, 1)
+        self.p_pt = self.glw.addPlot(row=0, col=0)
+        self.p_pc = self.glw.addPlot(row=1, col=0)
+        self.p_r = self.glw.addPlot(row=2, col=0)
+        self.p_r.setXLink(self.p_pc)
+        for p in (self.p_pt, self.p_pc, self.p_r):
+            p.showGrid(x=True, y=True, alpha=0.25)
+            p.addLegend(offset=(5, 5))
+        row = QtWidgets.QHBoxLayout()
+        row.addStretch(1)
+        self.save_pt = QtWidgets.QPushButton("Save point (CSV)")
+        self.save_pt.clicked.connect(lambda: self.save("point"))
+        self.save_ln = QtWidgets.QPushButton("Save line (CSV)")
+        self.save_ln.clicked.connect(lambda: self.save("line"))
+        row.addWidget(self.save_pt)
+        row.addWidget(self.save_ln)
+        lay.addLayout(row)
+        style_plots(self.glw, bool((win.config.get("ui", {}) or {}).get("dark", False)))
+        self.d, self.rp, self.rl = None, None, None
+
+    def closeEvent(self, ev):          # closing the window also removes the cursors
+        self.win.cpt_btn.setChecked(False)
+        self.win.cln_btn.setChecked(False)
+        super().closeEvent(ev)
+
+    @staticmethod
+    def _f(v, unit):
+        return "–" if v is None or not np.isfinite(v) else si(float(v), unit)
+
+    def show_cursors(self, d, pt, ln):
+        import cursors
+        self.d = d
+        self.rp = cursors.point(d, *pt) if pt is not None else None
+        self.rl = cursors.line(d, *ln) if ln is not None else None
+        self.save_pt.setVisible(self.rp is not None)
+        self.save_ln.setVisible(self.rl is not None)
+        ib = max(self.win.map_sel.currentIndex(), 0)
+        series = len(d.settings.outer_list()) > 1
+        colors = ["#1565c0", "#c62828", "#2e7d32", "#ef6c00", "#6a1b9a", "#00838f",
+                  "#ad1457", "#4e342e", "#283593", "#558b2f"]
+        txt = []
+        # ---- point
+        self.p_pt.clear()
+        self.p_pt.setVisible(self.rp is not None and series)
+        if self.rp is not None:
+            r = self.rp
+            u = r["unit"]
+            k = min(ib, len(r["outer"]) - 1)
+            pc, rf = r["pc"][k], r["refl"][k]
+            where = "" if r["outer"][k] is None else \
+                f" ({r['outer'][k]:g} {r['outer_unit']})"
+            s = (f"<b>Point</b> ({r['u']:.2f}, {r['v']:.2f}) µm, nearest pixel{where}: "
+                 f"photocurrent X {self._f(pc[0], u)}, Y {self._f(pc[1], u)}, "
+                 f"R {self._f(pc[2], u)}, θ {pc[3]:.1f}°")
+            if r["corr"] is not None:
+                s += (f"; corrected ({r['phase_deg']:+.1f}°): X′ {self._f(r['corr'][k][0], u)}, "
+                      f"Y′ {self._f(r['corr'][k][1], u)}")
+            s += f"; reflection R {self._f(rf[2], 'V')}"
+            txt.append(s)
+            if series:
+                xs = np.array([np.nan if b is None else b for b in r["outer"]], float)
+                self.p_pt.setLabel("bottom", f"{r['outer_name']} ({r['outer_unit']})")
+                self.p_pt.setLabel("left", "Photocurrent", units=u)
+                self.p_pt.plot(xs, r["pc"][:, 0], pen=pg.mkPen(colors[0], width=2),
+                               symbol="o", symbolSize=6, name="X")
+                if r["corr"] is not None:
+                    self.p_pt.plot(xs, r["corr"][:, 0], pen=pg.mkPen(colors[1], width=2),
+                                   symbol="s", symbolSize=6, name="X′ corrected")
+        # ---- line
+        for p in (self.p_pc, self.p_r):
+            p.clear()
+            p.setVisible(self.rl is not None)
+        if self.rl is not None:
+            r = self.rl
+            dist = r["distance"]
+            self.p_pc.setLabel("left", "Photocurrent X", units=r["unit"])
+            self.p_r.setLabel("left", "Reflection R", units="V")
+            self.p_r.setLabel("bottom", "Distance along the line (µm)")
+            for k, b in enumerate(r["outer"]):
+                c = colors[k % len(colors)]
+                lab = "" if b is None else f"{b:g} {r['outer_unit']}"
+                self.p_pc.plot(dist, r["pc"][k][:, 0], pen=pg.mkPen(c, width=2),
+                               name=(lab + " X").strip())
+                if r["corr"] is not None:
+                    self.p_pc.plot(dist, r["corr"][k][:, 0],
+                                   pen=pg.mkPen(c, width=1, style=QtCore.Qt.DashLine),
+                                   name=(lab + " X′ corrected").strip())
+                self.p_r.plot(dist, r["refl"][k][:, 2], pen=pg.mkPen(c, width=2),
+                              name=lab or None)
+            (u0, v0), (u1, v1) = r["a"], r["b"]
+            txt.append(f"<b>Line</b> ({u0:.2f}, {v0:.2f}) → ({u1:.2f}, {v1:.2f}) µm, "
+                       f"{dist[-1]:.2f} µm, {len(dist)} points every {r['step'] * 1000:.0f} nm "
+                       "(the scan step), nearest pixel at each point"
+                       + ("; dashed = phase-corrected X′" if r["corr"] is not None else ""))
+        self.text.setText("<br>".join(txt))
+
+    def save(self, kind):
+        import cursors
+        r = self.rp if kind == "point" else self.rl
+        if r is None or self.d is None or not getattr(self.d, "path", None):
+            self.win.error("Measure or open a saved map first.")
+            return
+        try:
+            path = cursors.save(self.d, r, kind)
+        except Exception as e:
+            self.win.error(f"Could not save:\n{e}")
+            return
+        self.win.toast(f"Saved {os.path.basename(path)} (+ info.txt) in "
+                       f"{os.path.basename(os.path.dirname(path))}", "info")

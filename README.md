@@ -188,12 +188,22 @@ clearly above the noise (5×), finds the direction of that line, and rotates X a
 one angle for the whole map (and for all maps of a series, so sign changes with bias stay).
 
 - **Spikes:** strong pixels whose phase doesn't fit the line are ignored (red × in the plot).
-- **Sign** (a line has two directions, 180° apart): the program takes the one closest to the
-  angle it used last time. As long as the lock-in phase, cables, SR570 setting and chopping
-  frequency are unchanged, the right angle stays about the same, so every file gets the same
-  sign convention. The first time, or if the new angle is more than 30° from the last one
-  (then you get a warning: something was changed), it takes the direction in which most of
-  the signal is positive.
+- **Sign** (a line has two directions, 180° apart): the program remembers, per **sample
+  name**, the total phase = lock-in PHASE (read from the front panel, saved with every file)
+  + correction. On the same sample it takes the direction that matches last time, so the sign
+  convention stays the same across files, even if the lock-in PHASE was changed or reset in
+  between. A new sample (or a total more than 30° from last time, with a warning: a cable,
+  the SR570 setting, the chopping frequency or the contacts changed?) uses the direction in
+  which most of the signal is positive.
+- **Hint at the start:** on a sample measured before, if the lock-in PHASE differs from last
+  time, a message tells you the PHASE that was used then. Setting it is optional (by hand on
+  the front panel; the program never changes it). A good habit: autophase once per device on
+  a strong spot, then leave it.
+- **Y left over**: the window says how much signal is left in Y (e.g. "3 % of the signal,
+  ≈ 1.8° phase spread"). Strong features still visible in Y have a slightly different
+  phase (response delay); they are not lost from X (X keeps cos of that angle: 99.97 % at
+  1.5°). **Phase lag** view: the lag of every pixel in degrees, with the time it means at
+  the chopping frequency.
 - **Series:** each map is also fitted on its own, only as a check; if the angles differ by
   more than their uncertainty, the window warns that the phase may change with bias / power.
 
@@ -210,6 +220,15 @@ one angle for the whole map (and for all maps of a series, so sign changes with 
   corrected copy**, or **No copy** to delete it.
 - If there is no clear signal, no copy is made (just a short message).
 - *File → Phase correction of the shown map / line…* opens the window again later.
+
+## Point and line cursors (reading values)
+Draw ▾ → **Point cursor** or **Line cursor**. The cursor appears on both maps; drag it on
+either one. A window shows the values of the **nearest measured pixel** (never interpolated):
+photocurrent X, Y, R, θ, the phase-corrected X′, Y′ (if a corrected copy exists) and the
+reflection. For a series, every map is read: the point gives a curve against bias / power,
+the line one profile per bias / power. The line is sampled at the scan step, with
+photocurrent and reflection on the same distance axis. **Save** writes numbers-only CSV +
+info.txt to `<name>_cursors/` next to the measurement.
 
 ## Measuring the resolution
 

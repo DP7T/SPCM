@@ -235,6 +235,10 @@ class SR830:
         """Reference phase set on the front panel (degrees), read only."""
         return float(self.inst.query("PHAS?"))
 
+    def frequency(self):
+        """Reference (chopping) frequency in Hz, read only."""
+        return float(self.inst.query("FREQ?"))
+
     # -- only for the optional auto range (off by default) --
     def sens_index(self):
         return int(self.inst.query("SENS?"))
@@ -561,6 +565,9 @@ class SimSR830:
 
     def phase(self):
         return self.ph_deg
+
+    def frequency(self):
+        return 1013.0
 
     def set_sens_index(self, i):
         self.sens_i = int(min(max(i, 0), len(SR830_SENS) - 1))
