@@ -1768,8 +1768,15 @@ class MainWindow(QtWidgets.QMainWindow):
                 except Exception:
                     poles = 4
                 self._poles_now.append(poles)
+                try:
+                    ph = float(li.phase())
+                except Exception:
+                    ph = None
+                if li is self.hw.lockin_pc:
+                    self._phase_now = ph
                 lab.setText(f"τ = {si(tau, 's')}, {6 * poles} dB/oct\n"
-                            f"sens = {si(li.sensitivity(), 'V/A')}")
+                            f"sens = {si(li.sensitivity(), 'V/A')}"
+                            + (f", phase {ph:.2f}°" if ph is not None else ""))
         except Exception as e:
             self.statusBar().showMessage(f"Lock-in read failed: {e}")
         self.update_eta()
@@ -2872,6 +2879,9 @@ class MainWindow(QtWidgets.QMainWindow):
              "date": time.strftime("%Y%m%d"), "time": time.strftime("%H%M"),
              "type": {"map": "map", "line": "line"}.get(kind, kind.replace("_", "") + "sweep")}
         v.update({k: val for k, val in self.experiment_fields()})
+        ph = getattr(self, "_phase_now", None)       # read with the lock-ins (Refresh / Start)
+        if ph is not None:
+            v["phase"] = naming.num(ph, "deg")
         if kind == "iv":
             v["type"] = "IV"
             if s is not None:

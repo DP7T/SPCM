@@ -231,6 +231,10 @@ class SR830:
     def sensitivity(self):
         return SR830_SENS[int(self.inst.query("SENS?"))]
 
+    def phase(self):
+        """Reference phase set on the front panel (degrees), read only."""
+        return float(self.inst.query("PHAS?"))
+
     # -- only for the optional auto range (off by default) --
     def sens_index(self):
         return int(self.inst.query("SENS?"))
@@ -552,6 +556,11 @@ class SimSR830:
 
     def sens_index(self):
         return self._si()
+
+    ph_deg = 0.0
+
+    def phase(self):
+        return self.ph_deg
 
     def set_sens_index(self, i):
         self.sens_i = int(min(max(i, 0), len(SR830_SENS) - 1))

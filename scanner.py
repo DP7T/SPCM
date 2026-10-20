@@ -1168,6 +1168,11 @@ class ScanWorker(QtCore.QObject):
                     "sens_pc": hw.lockin_pc.sensitivity(),
                     "sens_refl": hw.lockin_refl.sensitivity(),
                     "overload_lines": 0}
+                for key, li_ in (("phase_pc_deg", hw.lockin_pc), ("phase_refl_deg", hw.lockin_refl)):
+                    try:                        # front-panel reference phase, read only
+                        d.map_info[ib][key] = float(li_.phase())
+                    except Exception:
+                        pass
                 self._snapshot(ib, "start")
                 self._tau = (tau_pc, tau_r)
                 try:

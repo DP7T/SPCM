@@ -528,6 +528,11 @@ if HAVE_QT:
         shot("save_box")
         assert w.name_preview.text().startswith("next map:"), w.name_preview.text()
         print("      " + w.name_preview.text())
+        import naming
+        w.refresh_lockins()
+        nm = naming.make_name("{sample}_{phase}_{n}", w._name_values("map"), OUT)
+        assert "deg" in nm, nm                          # lock-in phase in the file name
+        print("      with the lock-in phase: " + nm)
         # fine map across an electrode edge, then "Measure resolution"
         w.set_origin(0.0, 0.0)
         w.xc.setValue(1)

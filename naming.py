@@ -29,6 +29,7 @@ FIELDS = [
     ("power", "Power on sample (10uW)"),
     ("bias", "Bias (-1to1V)"),
     ("mode", "Scan mode (step / fly)"),
+    ("phase", "Lock-in phase (127deg), photocurrent lock-in"),
     ("type", "Type (map, line, powersweep …)"),
     ("n", "Number (001, 002 …)"),
 ]

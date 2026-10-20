@@ -33,3 +33,13 @@ chopping frequency (e.g. fast photovoltaic vs slower photothermal response).
 The user will look at saved files (h5, CSV, PNG, info.txt) and list what should change.
 Collect that list here before changing the file formats (Origin import must keep working,
 `scanner.load()` must keep reading old files).
+
+## 5. Phase memory per sample (total phase)
+The right angle depends on the device (R x C of contacts and cables, slow photoresponse), so
+it can be completely different on another sample. Idea: remember per **sample name** the
+total phase = lock-in phase (now saved, `phase_pc_deg`) + correction angle. The sign rule and
+the "FAR from your last angle" warning then compare that total for the same sample only (a
+reset knob or an autophase no longer looks like a change; a new sample uses the majority rule
+quietly). Optional: when starting on a known sample, a hint "last time: total phase 127.4° -
+set the lock-in PHASE to 127.4°" (the user sets it by hand; writing it would be a new
+exception to the read-only rule - ask first).

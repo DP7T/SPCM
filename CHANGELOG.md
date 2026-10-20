@@ -1,6 +1,11 @@
 # Changelog
 
-## 1.2.5 (in testing)
+## 1.2.6 (in testing)
+- The **lock-in phase** (as set on the front panel) is now read and saved with every map,
+  line and point sweep (both lock-ins), shown in the Instruments tab, and can be put in the
+  file name: Add ▾ → *Lock-in phase* (`{phase}`, e.g. `127deg`). Only read, never changed
+
+## 1.2.5 (pre-release)
 - Phase: strong pixels whose phase doesn't fit are ignored (spikes); the sign follows the
   angle used last time (same convention across files while the lock-in phase is untouched),
   else most of the signal positive; series: each map checked on its own, warning if the

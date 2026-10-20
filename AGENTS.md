@@ -49,7 +49,7 @@ the real hardware and report back with screenshots. Write in plain language for 
 ## Decisions already made (keep them)
 
 **Lock-ins and signal**
-- **Analog control:** the lock-ins are only **read** (τ, sensitivity, slope, input). Never add controls that change them. Exceptions: the SINE OUT amplitude for setting the laser power, and the optional **Auto range up** (user's request, off by default): photocurrent lock-in only, one range less sensitive when R > 80 % of full scale (`scanner.range_up`), never back down; the pixel (fly: line; sweep: point) is re-measured after one pixel wait; every change is notified and saved in `map_info[...]['range_changes']` / sweep `info['range_changes']`. Its purpose: no saturation during unattended measurements.
+- **Analog control:** the lock-ins are only **read** (τ, sensitivity, slope, input, reference phase `PHAS?` - saved per map as `phase_pc_deg` / `phase_refl_deg`, file-name field `{phase}`). Never add controls that change them. Exceptions: the SINE OUT amplitude for setting the laser power, and the optional **Auto range up** (user's request, off by default): photocurrent lock-in only, one range less sensitive when R > 80 % of full scale (`scanner.range_up`), never back down; the pixel (fly: line; sweep: point) is re-measured after one pixel wait; every change is notified and saved in `map_info[...]['range_changes']` / sweep `info['range_changes']`. Its purpose: no saturation during unattended measurements.
 - **Signal conversion** gives peak amplitude:
   - SR570: × √2 × sensitivity (A/V) → photocurrent.
   - SR560: × √2 ÷ gain → photovoltage.
