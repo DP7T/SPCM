@@ -585,7 +585,7 @@ class SimSR830:
         pf = max(self.w.power_factor(), 0.0)
         # photocurrent grows a bit slower than linearly with power (α ≈ 0.85)
         sig *= pf ** 0.85 if self.role == "photocurrent" else pf
-        ph = np.deg2rad(phase)
+        ph = np.deg2rad(phase - self.ph_deg)          # turning PHASE rotates X, Y
         X = sig * np.cos(ph) + noise * self.w.rng.normal()
         Y = sig * np.sin(ph) + noise * self.w.rng.normal()
         fs = 1.09 * self.full_scale()                 # the outputs saturate like a real SR830
