@@ -29,13 +29,13 @@ _copy_cache = {}
 
 
 def corrected(d):
-    """Phase-corrected processed photocurrent X', Y' of all maps [map, iy, ix], from the
-    file itself (if it is a corrected copy) or from its <name>_phased.h5; else None.
-    -> (X', Y', angle_deg) or None."""
+    """The phase-corrected data for d: d itself if it is a corrected copy, else its
+    <name>_phased.h5 (loaded once, cached), else None. -> (ScanData, angle_deg) or None.
+    Read it with nearest() in its OWN axes: a loaded file and a live scan can store
+    the pixels in different orders."""
     import phase
-    fac = pc_scale(d.settings)[0]
     if getattr(d, "phase", None):
-        return d.pc[..., 0] * fac, d.pc[..., 1] * fac, d.phase.get("phase_deg")
+        return d, d.phase.get("phase_deg")
     path = getattr(d, "path", None)
     if not path:
         return None
@@ -47,13 +47,22 @@ def corrected(d):
         from scanner import load
         try:
             c = load(cp)
-            _copy_cache.clear()
-            _copy_cache[key] = (c.pc[..., 0] * fac, c.pc[..., 1] * fac,
-                                (c.phase or {}).get("phase_deg"))
         except Exception:
             return None
-    X, Y, a = _copy_cache[key]
-    return (X, Y, a) if X.shape == d.pc.shape[:3] else None
+        _copy_cache.clear()
+        _copy_cache[key] = (c, (c.phase or {}).get("phase_deg"))
+    c, a = _copy_cache[key]
+    return (c, a) if c.pc.shape[0] == d.pc.shape[0] else None
+
+
+def _corr_at(cor, us, vs):
+    """Corrected X', Y' (converted) at the pixels nearest to (us, vs): [map, point, 2]."""
+    c, _ = cor
+    fac = pc_scale(c.settings)[0]
+    idx = [nearest(c, a, b)[:2] for a, b in zip(np.atleast_1d(us), np.atleast_1d(vs))]
+    I = np.array([k[0] for k in idx])
+    J = np.array([k[1] for k in idx])
+    return c.pc[:, I, J, :2] * fac
 
 
 def raw_readings(d):
@@ -90,8 +99,8 @@ def point(d, u0, v0):
     return {"u": u, "v": v, "i": int(i), "j": int(j), "unit": unit,
             "outer": vals, "outer_name": oname, "outer_unit": ounit,
             "pc": pc, "lockin": raw[:, i, j, :2].copy(), "refl": d.refl[:, i, j, :].copy(),
-            "corr": None if cor is None else np.stack([cor[0][:, i, j], cor[1][:, i, j]], 1),
-            "phase_deg": None if cor is None else cor[2]}
+            "corr": None if cor is None else _corr_at(cor, u, v)[:, 0, :],
+            "phase_deg": None if cor is None else cor[1]}
 
 
 def line(d, a, b):
@@ -116,12 +125,13 @@ def line(d, a, b):
     pc[..., :3] *= fac
     cor = corrected(d)
     vals, oname, ounit = _labels(d)
-    return {"distance": t * L, "u": us, "v": vs, "pix_u": np.array([k[2] for k in idx]),
-            "pix_v": np.array([k[3] for k in idx]), "unit": unit, "step": step,
+    pu, pv = np.array([k[2] for k in idx]), np.array([k[3] for k in idx])
+    return {"distance": t * L, "u": us, "v": vs, "pix_u": pu,
+            "pix_v": pv, "unit": unit, "step": step,
             "outer": vals, "outer_name": oname, "outer_unit": ounit,
             "pc": pc, "lockin": raw[:, I, J, :2].copy(), "refl": d.refl[:, I, J, :].copy(),
-            "corr": None if cor is None else np.stack([cor[0][:, I, J], cor[1][:, I, J]], -1),
-            "phase_deg": None if cor is None else cor[2], "a": a, "b": b}
+            "corr": None if cor is None else _corr_at(cor, pu, pv),
+            "phase_deg": None if cor is None else cor[1], "a": a, "b": b}
 
 
 def _next(folder, kind):

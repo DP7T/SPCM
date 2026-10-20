@@ -577,6 +577,11 @@ if HAVE_QT:
         w.cln_btn.setChecked(True)
         pump(0.8)
         assert w.cursor_dialog is not None and w.cursor_dialog.rp is not None
+        rl = w.cursor_dialog.rl
+        assert rl is not None and rl["corr"] is not None, "no corrected values on the line"
+        # correction -38°: corrected X' must follow X (same pixels, same sign)
+        xr, xc = rl["pc"][0][:, 0], rl["corr"][0][:, 0]
+        assert np.nansum(xr * xc) > 0.5 * np.nansum(xr * xr), (xr, xc)
         shot("map_cursors")
         w.cursor_dialog.grab().save(os.path.join(OUT, "screen_cursor_dialog.png"))
         w.cursor_dialog.close()
