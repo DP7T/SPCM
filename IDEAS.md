@@ -20,3 +20,13 @@ the user chose to keep 1.2.5's phase behaviour and only add the phase-lag view.
 The user will look at saved files (h5, CSV, PNG, info.txt) and list what should change.
 Collect that list here before changing the file formats (Origin import must keep working,
 `scanner.load()` must keep reading old files).
+
+## 3. Drift alignment of series by the reflection (option 1, agreed as an idea 2026-10-21)
+Seen in the lab (1.2.5): in a long bias series of line scans under low pressure (vacuum
+chamber), the sample drifted ~0.5-1 µm over 41 lines; the reflection features shifted
+steadily from line to line while the stage went to the same coordinates every time.
+Idea: after the measurement, find each line's shift against the first line by
+cross-correlating the reflection profiles, shift the photocurrent of that line by the
+same amount, and save a drift-corrected copy (like `_phased`) together with the measured
+shift per line (= a drift curve). For map series the same with a 2-D shift. No
+correction during the measurement (option 2 was not chosen). Ask before building.
