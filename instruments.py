@@ -57,7 +57,11 @@ class TangoStage:
     from appinfo import app_dir as _app_dir
     LOG = os.path.join(_app_dir(), "spcm_stage.log")
 
+    _quiet = False          # position polling for the live display is not logged
+
     def _log(self, line):
+        if self._quiet:
+            return
         try:
             if not hasattr(self, "_logf"):
                 if os.path.exists(self.LOG) and os.path.getsize(self.LOG) > 5e6:
@@ -94,8 +98,14 @@ class TangoStage:
         return vals
 
     # -- high level --
-    def position(self):
-        x, y = self._numbers(self.query("?pos"), 2, "?pos")
+    def position(self, quiet=False):
+        """quiet=True: not written to spcm_stage.log (the live position display asks
+        a few times per second; that would fill the log)."""
+        self._quiet = bool(quiet)
+        try:
+            x, y = self._numbers(self.query("?pos"), 2, "?pos")
+        finally:
+            self._quiet = False
         return x, y
 
     def is_moving(self):
@@ -548,7 +558,7 @@ class SimStage:
         if frac >= 1.0:
             self._mv = None
 
-    def position(self):
+    def position(self, quiet=False):
         self._update()
         return self.w.x, self.w.y
 

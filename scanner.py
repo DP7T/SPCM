@@ -76,6 +76,7 @@ class ScanSettings:
                                    # the scan direction (removes stage backlash)
     extra_settle_ms: float = 0.0
     auto_range: bool = False       # photocurrent lock-in: next range up above AUTO_RANGE_FRAC
+    n_avg: int = 1                 # readings per point (line scans), ~1 tau apart; 1 = like a map
     biases: list = field(default_factory=lambda: [None])  # None = don't touch bias
     sample: str = "sample"
     notes: str = ""
@@ -283,6 +284,11 @@ class ScanData:
         self.power_lock = {}    # target, start amplitude
         self.started = time.strftime("%Y-%m-%dT%H:%M:%S")
         self.completed = False
+        # spread (std) of the readings per point when several are averaged (n_avg > 1)
+        self.pc_std = self.refl_std = None
+        if int(getattr(settings, "n_avg", 1) or 1) > 1:
+            self.pc_std = np.full_like(self.pc, np.nan)
+            self.refl_std = np.full_like(self.refl, np.nan)
         self.raw_pc = None      # phase-corrected copy: the unrotated lock-in readings
         self.phase = None       # phase-corrected copy: angle, offset, ... (phase.py)
 
@@ -375,6 +381,15 @@ class ScanData:
                                      data=raw[ib, :, :, c][view], compression="gzip")
                     g.create_dataset(f"raw/reflection_{nm}",
                                      data=self.refl[ib, :, :, c][view], compression="gzip")
+                if self.pc_std is not None:      # spread of the averaged readings
+                    for c, ch in enumerate(CHANNELS[:3]):
+                        dd = g.create_dataset(f"photocurrent_{ch}_std",
+                                              data=(self.pc_std[ib, :, :, c] * fac)[view])
+                        dd.attrs["unit"] = unit
+                        dd = g.create_dataset(f"reflection_{ch}_std",
+                                              data=self.refl_std[ib, :, :, c][view])
+                        dd.attrs["unit"] = "V"
+                    g.attrs["readings_per_point"] = int(getattr(s, "n_avg", 1))
                 g["photocurrent_X"].attrs["conversion"] = formula
                 # laser power and camera at the start/end of this map
                 for when in ("start", "end"):
@@ -509,12 +524,21 @@ def load(path):
             d.pc = np.full((nb, ny, nx, 4), np.nan)
             d.refl = np.full((nb, ny, nx, 4), np.nan)
             d.map_info = []
+            d.pc_std = d.refl_std = None          # filled below if the file has them
             for ib, m in enumerate(maps):
                 g = f[m]
                 for c, ch in enumerate(CHANNELS):
                     nm = ch if c < 3 else "theta_deg"
                     d.pc[ib, :, :, c] = g[f"raw/photocurrent_{nm}"][()]
                     d.refl[ib, :, :, c] = g[f"raw/reflection_{nm}"][()]
+                if "photocurrent_X_std" in g:
+                    if d.pc_std is None:
+                        d.pc_std = np.full_like(d.pc, np.nan)
+                        d.refl_std = np.full_like(d.refl, np.nan)
+                    fac_ = pc_scale(d.settings)[0]
+                    for c, ch in enumerate(CHANNELS[:3]):
+                        d.pc_std[ib, :, :, c] = g[f"photocurrent_{ch}_std"][()] / fac_
+                        d.refl_std[ib, :, :, c] = g[f"reflection_{ch}_std"][()]
                 d.map_info.append({k: (v.item() if hasattr(v, "item") else v)
                                    for k, v in g.attrs.items()})
                 for when in ("start", "end"):
@@ -617,6 +641,17 @@ class SafeStage:
 
 SINE_STEP_V = 0.002       # SR830 SINE OUT resolution
 AUTO_RANGE_FRAC = 0.8     # auto range: go up one range above 80 % of full scale
+
+
+def _average(readings):
+    """Mean and spread (std, ddof=1) of several lock-in readings [X, Y, R, theta]:
+    X, Y, R averaged; theta from the mean X, Y (averaging angles near ±180° fails)."""
+    a = np.array(readings, float)
+    m = a.mean(0)
+    m[3] = np.degrees(np.arctan2(m[1], m[0]))
+    sd = a.std(0, ddof=1) if len(a) > 1 else np.zeros(4)
+    sd[3] = np.nan
+    return m, sd
 
 
 def range_up(li, R, fs, frac=AUTO_RANGE_FRAC):
@@ -918,6 +953,21 @@ class ScanWorker(QtCore.QObject):
             t2 = time.time()
             pc, rf = self._read_both()
             pc = self._check_range(ib, iy, ix, pc, wait)
+            n_avg = int(getattr(self.s, "n_avg", 1) or 1)
+            if n_avg > 1:                        # several readings ~1 tau apart
+                pcs, rfs = [pc], [rf]
+                spacing = max(self._tau) if getattr(self, "_tau", None) else 0.0
+                for _ in range(n_avg - 1):
+                    if self._stop:
+                        break
+                    self._sleep(spacing)
+                    p_, r_ = self._read_both()
+                    pcs.append(p_)
+                    rfs.append(r_)
+                pc, sd_pc = _average(pcs)
+                rf, sd_rf = _average(rfs)
+                if d.pc_std is not None:
+                    d.pc_std[ib, iy, ix], d.refl_std[ib, iy, ix] = sd_pc, sd_rf
             t3 = time.time()
             self._t["move"] += t1 - t0
             self._t["wait"] += t2 - t1

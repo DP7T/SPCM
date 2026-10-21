@@ -644,13 +644,32 @@ if HAVE_QT:
         # line drawn on the map -> line scan (series: nothing)
         w.line_btn.setChecked(True)
         shot("map_with_line")
-        w.scan_line()
+        w.scan_line()                             # 'Use this line' -> Line tab
+        assert w.side_tabs.currentIndex() == 1, "Line tab not shown"
+        assert w.start_btn.text() == "Start line", w.start_btn.text()
+        w.ln_navg.setValue(3)                     # 3 readings per point, error bars
+        w.ln_step.setValue(500)
+        shot("line_tab")
+        w.start()
         t0 = time.time()
         while w.thread is not None and time.time() - t0 < 300:
             pump(0.2)
         assert w.thread is None and w.line_data is not None, "line scan did not finish"
+        ld = w.line_data
+        assert ld.pc_std is not None and np.isfinite(ld.pc_std[..., 0]).any(), "no spread"
+        from scanner import load as _load
+        ld2 = _load(ld.path)
+        assert ld2.pc_std is not None, "spread not saved"
+        assert int(ld2.settings.n_avg) == 3
+        print(f"      line from the Line tab: {ld.pc.shape[2]} points, 3 readings each "
+              "(mean + std saved)")
         shot("line")
         w.line_btn.setChecked(False)
+        # live position from the origin while the stage moves (joystick)
+        HW.stage.move_to(w.origin_xy[0] + 2.0 * w.sx, w.origin_xy[1] - 1.5 * w.sy)
+        w._poll_position()
+        assert "+2.00, -1.50" in w.here_lab.text(), w.here_lab.text()
+        print("      " + w.here_lab.text())
         # camera: calibrate, then draw a frame and a line on it
         if getattr(w, "cam_tab", None) is not None:
             w.tabs.setCurrentWidget(w.cam_tab)
@@ -681,7 +700,7 @@ if HAVE_QT:
         # point sweep (bias x power) through the GUI
         HW.stage.move_to(-5, 0.5)
         w.amp_mode.setCurrentIndex(w.amp_mode.findData("sr570"))
-        w.side_tabs.setCurrentIndex(1)
+        w.side_tabs.setCurrentIndex(2)
         w.sw_kind.setCurrentIndex(w.sw_kind.findData("bias_power"))
         w.sw_powers.setText("40, 60, 80")
         w.sw_biases.setText("-0.5, 0.5")
@@ -693,7 +712,7 @@ if HAVE_QT:
         assert w.thread is None and w.sweep_data is not None, "sweep did not finish"
         shot("sweep_bias_power")
         # quick I-V through the GUI
-        w.side_tabs.setCurrentIndex(2)
+        w.side_tabs.setCurrentIndex(3)
         w.iv_max.setValue(0.5)
         w.iv_min.setValue(-0.5)
         w.iv_step.setValue(50)

@@ -187,8 +187,8 @@ class LineView(QtWidgets.QWidget):
         super().__init__()
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        self.info = QtWidgets.QLabel("No line scan yet. On the Maps tab press 'Draw line', "
-                                     "drag its ends, then 'Scan this line'.")
+        self.info = QtWidgets.QLabel("No line scan yet. Set the line in the Line tab (or draw "
+                                     "it: Draw ▾ → Line to scan along), then Start line.")
         self.info.setStyleSheet("color:gray")
         self.info.setWordWrap(True)
         lay.addWidget(self.info)
@@ -242,6 +242,13 @@ class LineView(QtWidgets.QWidget):
             self.sig.plot(dist[ok], sig[ib][ok], pen=pg.mkPen(c, width=1.5), symbol="o",
                           symbolSize=4, symbolPen=None, symbolBrush=c,
                           name=None if b is None else f"{b:g} {punit}")
+            sd = linescan.signal_std(d, channel)
+            if sd is not None:                   # error bars: spread of the readings
+                okd = ok & np.isfinite(sd[ib])
+                if okd.any():
+                    self.sig.addItem(pg.ErrorBarItem(
+                        x=dist[okd], y=sig[ib][okd], height=2 * sd[ib][okd],
+                        beam=0, pen=pg.mkPen(c, width=1)))
             r = d.refl[ib, 0, :, 2]
             okr = np.isfinite(r)
             self.refl.plot(dist[okr], r[okr], pen=pg.mkPen(c, width=1.2))
@@ -266,4 +273,6 @@ class LineView(QtWidgets.QWidget):
                 self.map.setTitle(f"{kind}: distance × {pname.split()[-1].lower()}")
         n = int(np.isfinite(sig).sum())
         self.info.setText(f"{n} of {sig.size} points  ·  {dist[-1]:.2f} µm, "
-                          f"{len(dist)} points per line, step {s.step * 1000:.0f} nm")
+                          f"{len(dist)} points per line, step {s.step * 1000:.0f} nm"
+                          + (f", {int(getattr(s, 'n_avg', 1))} readings per point (bars = std)"
+                             if int(getattr(s, "n_avg", 1) or 1) > 1 else ""))

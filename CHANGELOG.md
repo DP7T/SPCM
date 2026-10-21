@@ -1,6 +1,14 @@
 # Changelog
 
-## 1.2.7 (in testing)
+## 1.2.8 (in testing)
+- **Line tab** (left, after Map): line scans with their own start / end (µm from the
+  origin), step, **readings per point** (1 = like a map; more = mean + spread, error bars)
+  and series (bias / power). A line drawn on a map or the camera image ("Use this line")
+  fills it in. Timing, laser power and preamp come from the Map and Instruments tabs
+- **Live position**: the Map tab shows where the laser is now from the origin (updated while
+  you move with the joystick), and a cyan cross on the maps follows it
+
+## 1.2.7 (pre-release)
 - Fixed: a scan could stop with "could not convert string to float" (seen in 1.2.5, the
   problem was there since 0.9): the two lock-ins were read at the same time and their
   replies on the shared GPIB bus could mix. They are now read one after the other, and a

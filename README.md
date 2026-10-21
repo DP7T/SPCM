@@ -133,12 +133,16 @@ The **Plot** tab on the right shows the result live:
 Afterwards the SINE OUT goes back to where it was in 2 mV steps (untick *Put the SINE OUT back afterwards* if you don't want that) and the bias ramps back to 0 V. Like every measurement it gets its own folder (`powersweep`, `biassweep` or `biaspowersweep` in the name) with the .h5, a PNG with the same plots, and a `_csv` folder with `sweep.csv` (numbers only, one row per point, every channel with its spread; the columns are listed in `info.txt`) and, for bias × power, `photocurrent_X_matrix.csv`.
 
 ## Line scans
-
-1. Choose **Draw ▾ → Line to scan along** above the maps. A yellow line appears on both maps; drag its ends (or the whole line) where you want it. The status bar shows its length and the number of points.
-2. Press **Scan this line** (it appears once the line is drawn). The laser steps along the line at any angle, using the **Step**, **Timing** and **Series** from the Map tab and the laser-power setting from the Instruments tab.
-3. The **Plot** tab on the right shows the signal and the reflection vs the distance along the line, one curve per value. With a **Series** of biases or laser powers you also get the **distance × bias** (or **distance × power**) image.
-
-You can draw the line on the camera image too, once the camera is calibrated. Line scans get their own folder too (`line` in the name): the .h5 has the same layout as maps, with 1-row images plus `distance_um` and the x, y of every point; a PNG; and `_csv/line.csv` (numbers only, columns listed in `info.txt`).
+The **Line** tab (left) has its own settings, separate from the map:
+- **Start x, y** and **End x, y** in µm from the origin. Type them, or draw the line on a map
+  or on the calibrated camera image (Draw ▾ → Line to scan along) and press **Use this line**.
+- **Step** (nm) along the line, and **Readings per point**: 1 = one reading per point, like a
+  map; more = that many readings about one time constant apart, the mean is saved and the
+  spread (standard deviation) as error bars (also in the CSV and the h5: `*_std`).
+- **Series**: nothing, bias or laser power on the sample, with its own values.
+- Timing (wait), laser power and the preamp settings come from the Map and Instruments tabs.
+- **Start line**: the result appears in the Plot tab and is saved like a map (own folder,
+  numbers-only CSV with the columns listed in info.txt, PNG).
 
 ## Camera calibration
 

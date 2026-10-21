@@ -67,6 +67,15 @@ def signal(d, channel=0):
     return d.pc[:, 0, :, channel] * fac, unit
 
 
+def signal_std(d, channel=0):
+    """[bias, point] spread (std) of the averaged readings, converted; None if the line
+    was measured with one reading per point (or for theta)."""
+    if getattr(d, "pc_std", None) is None or channel == 3:
+        return None
+    fac = pc_scale(d.settings)[0]
+    return d.pc_std[:, 0, :, channel] * fac
+
+
 def export_csv(d):
     """<name>_csv/line.csv: numbers only, one row per point; columns: distance,
     x, y, then per line (bias / power) the photocurrent X, Y, R, theta and the
@@ -89,6 +98,11 @@ def export_csv(d):
             for c, ch in enumerate(CHANNELS):
                 cols.append(f"{name} {ch}{tag} ({uu if c < 3 else 'deg'})")
                 data.append(arr[ib, 0, :, c] * (k if c < 3 else 1.0))
+            sd = d.pc_std if name == "photocurrent" else d.refl_std
+            if sd is not None:                   # spread of the readings per point
+                for c, ch in enumerate(CHANNELS[:3]):
+                    cols.append(f"{name} {ch} std{tag} ({uu})")
+                    data.append(sd[ib, 0, :, c] * k)
     with open(os.path.join(out, "line.csv"), "w") as fh:
         for row in np.array(data).T:
             fh.write(",".join("" if not np.isfinite(x) else f"{x:.6e}" for x in row) + "\n")
@@ -170,9 +184,13 @@ def save_figure(d, path, channel=0, dpi=200):
         fig, (a1, a2) = plt.subplots(2, 1, figsize=(6.4, 5.6), sharex=True,
                                      gridspec_kw={"height_ratios": [2, 1]})
     colors = plt.cm.viridis(np.linspace(0, 0.9, max(len(biases), 1)))
+    sd = signal_std(d, channel)
     for ib, b in enumerate(biases):
         a1.plot(dist, sig[ib] / scale, "o-", ms=3, lw=1.2, color=colors[ib],
                 label=None if b is None else f"{b:g} {punit}")
+        if sd is not None:                       # spread of the readings per point
+            a1.errorbar(dist, sig[ib] / scale, yerr=sd[ib] / scale, fmt="none",
+                        ecolor=colors[ib], elinewidth=0.8, capsize=1.5)
         a2.plot(dist, d.refl[ib, 0, :, 2] * 1e3, "-", lw=1, color=colors[ib])
     a1.axhline(0, color="0.6", lw=0.8)
     a1.set_ylabel(f"{kind} {ch} ({pre}{unit})")

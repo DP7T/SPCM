@@ -415,6 +415,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return lay
 
         scan_lay = page("Map")
+        line_lay = page("Line")
         sweep_lay = page("Point sweep")
         iv_lay = page("I–V")
         inst_lay = page("Instruments")
@@ -473,6 +474,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.origin_lab = QtWidgets.QLabel("origin: not set")
         self.origin_lab.setStyleSheet("color:gray")
         f.addRow(self.origin_lab)
+        self.here_lab = QtWidgets.QLabel("")
+        self.here_lab.setToolTip("Where the laser is now, from the origin (0, 0), updated "
+                                 "while you move with the joystick. Also shown as a cross "
+                                 "on the maps.")
+        f.addRow(self.here_lab)
+        self.here_marks = []
+        self._pos_timer = QtCore.QTimer(self)
+        self._pos_timer.setInterval(400)
+        self._pos_timer.timeout.connect(self._poll_position)
+        self._pos_timer.start()
         f.addRow("Scan towards", self.direction)
         self.angle = spin(0.0, -180, 180, 2, 1, 1.0, "°")
         self.angle.setToolTip("Rotate the scan frame (degrees, counter-clockwise, around "
@@ -721,6 +732,7 @@ class MainWindow(QtWidgets.QMainWindow):
         inst_lay.addStretch(1)
         self.build_iv_tab(iv_lay)
         self.build_sweep_tab(sweep_lay)
+        self.build_line_tab(line_lay)
         for cb in side.findChildren(QtWidgets.QComboBox):     # narrow drop-downs
             cb.setSizeAdjustPolicy(
                 QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
@@ -831,11 +843,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.line_btn = QtWidgets.QPushButton("Draw line")
         self.line_btn.setCheckable(True)
         self.line_btn.setToolTip("Show a line on the maps. Drag its two ends where you "
-                                 "want, then press 'Scan this line'. Step, timing, series "
+                                 "want, then press 'Use this line' (fills the Line tab). Step, timing, series "
                                  "(bias / laser power) and laser power come from the Scan "
                                  "and Instruments tabs.")
         self.line_btn.toggled.connect(self.toggle_line)
-        self.use_line_btn = QtWidgets.QPushButton("Scan this line")
+        self.use_line_btn = QtWidgets.QPushButton("Use this line")
+        self.use_line_btn.setToolTip("Put the drawn line into the Line tab (start / end); "
+                                     "set step, readings and series there, then Start line.")
         self.use_line_btn.setEnabled(False)
         self.use_line_btn.clicked.connect(self.scan_line)
         bar.addWidget(self.line_btn)
@@ -879,7 +893,8 @@ class MainWindow(QtWidgets.QMainWindow):
             "• Drag the dashed line for a line cut; drag the colour bar to set the scale.\n"
             "• Draw ▸ Scan frame: move, resize and rotate the frame over the area you want, "
             "then press 'Scan this frame' (fills in the Map tab).\n"
-            "• Draw ▸ Line to scan along: drag its two ends, then 'Scan this line'. Step, "
+            "• Draw ▸ Line to scan along: drag its two ends, then 'Use this line' (fills the "
+            "Line tab, where you set step, readings per point and series). Timing "
             "timing and series come from the Map tab.\n"
             "• Draw ▸ Resolution line: put it across a sharp edge on the reflection map; the "
             "spot size (FWHM) is fitted.\n"
@@ -1410,7 +1425,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cam_line_btn = QtWidgets.QPushButton("Draw line")
         self.cam_line_btn.setCheckable(True)
         self.cam_line_btn.toggled.connect(self.toggle_cam_line)
-        self.cam_use_line = QtWidgets.QPushButton("Scan this line")
+        self.cam_use_line = QtWidgets.QPushButton("Use this line")
+        self.cam_use_line.setToolTip("Put the drawn line into the Line tab")
         self.cam_use_line.clicked.connect(self.use_cam_line)
         self.cam_draw = self._draw_menu([("Scan frame (move, resize, rotate)",
                                           self.cam_frame_btn),
@@ -1431,7 +1447,7 @@ class MainWindow(QtWidgets.QMainWindow):
             "flake corner) and press the button. The stage moves a few µm and comes back.\n"
             "• After calibrating: double-click the image to move the laser there, and use "
             "Draw ▾ for a scan frame or a line on the live image (they stay on the sample "
-            "when the stage moves), then 'Scan this frame' / 'Scan this line'."))
+            "when the stage moves), then 'Scan this frame' / 'Use this line' (Line tab)."))
         lay.addLayout(bar2)
         self._show_cal()
         glw = pg.GraphicsLayoutWidget()
@@ -1629,7 +1645,7 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             self.error(f"Could not read the stage:\n{e}")
             return
-        self.start_line(a, b)
+        self._fill_line_tab(a, b)
 
     def _cam_flip(self, *_):
         fx, fy = self.cam_flipx.isChecked(), self.cam_flipy.isChecked()
@@ -1709,13 +1725,17 @@ class MainWindow(QtWidgets.QMainWindow):
             self._save_setting("series", key, v)
 
     def _series(self):
-        """-> (outer, values) for the next map or line scan, checked.
-        ('bias', [None]) = a single map."""
+        """-> (outer, values) for the next map, checked. ('bias', [None]) = one map."""
+        return self._parse_series(self.ser_kind.currentData(), self.ser_vals.text())
+
+    def _line_series(self):
+        """The Line tab's own series."""
+        return self._parse_series(self.ln_kind.currentData(), self.ln_vals.text())
+
+    def _parse_series(self, k, text):
         from scanner import parse_list
-        k = self.ser_kind.currentData()
         if k == "none":
             return "bias", [None]
-        text = self.ser_vals.text()
         if k == "bias":
             if not (self.has_bias and self.amp_mode.currentData() == "sr570"):
                 raise ValueError("A bias series needs the SR570 current preamp (Instruments "
@@ -1737,10 +1757,12 @@ class MainWindow(QtWidgets.QMainWindow):
         return k, vals
 
     # ----------------------------------------------------------------
-    def settings(self):
+    def settings(self, series=True):
+        """Map settings. series=False: without the Map tab's series (for line scans,
+        which have their own)."""
         if self.origin_xy is None:
             raise ValueError("Set the origin first (Set origin here).")
-        outer, values = self._series()
+        outer, values = self._series() if series else ("bias", [None])
         biases = values if outer == "bias" else [None]
         return ScanSettings(
             outer=outer, outer_values=values if outer == "power" else [],
@@ -1789,6 +1811,7 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             self.statusBar().showMessage(f"Lock-in read failed: {e}")
         self.update_eta()
+        self._line_tab_changed()
 
     def update_eta(self, *_):
         try:
@@ -2145,23 +2168,28 @@ class MainWindow(QtWidgets.QMainWindow):
             "(drag the ends or the whole line)")
 
     def scan_line(self):
+        """'Use this line': the line drawn on a map goes into the Line tab."""
         if not self.line_rois or self.data is None:
             return
         (u0, v0), (u1, v1) = self._line_ends()
-        self.start_line(self.map_to_stage(self.data, u0, v0),
-                        self.map_to_stage(self.data, u1, v1))
+        self._fill_line_tab(self.map_to_stage(self.data, u0, v0),
+                            self.map_to_stage(self.data, u1, v1))
 
     def start_line(self, start_stage, end_stage):
-        """Scan along a line between two stage positions (µm)."""
+        """Scan along a line between two stage positions (µm), with the step, readings
+        per point and series of the Line tab (timing, power, preamp from the Map and
+        Instruments tabs)."""
         if self._busy():
             return
         import linescan
         try:
-            base = self.settings()
+            base = self.settings(series=False)
+            outer, values = self._line_series()
             s = linescan.line_settings(
-                start_stage, end_stage, base.step,
-                biases=None if base.biases == [None] else base.biases,
-                outer=base.outer, values=base.outer_values,
+                start_stage, end_stage, self.ln_step.value() / 1000,
+                biases=None if values == [None] else (values if outer == "bias" else None),
+                outer=outer, values=values if outer == "power" else None,
+                n_avg=self.ln_navg.value(),
                 origin=self.origin_xy, flips=(self.sx < 0, self.sy < 0),
                 settle_tc=base.settle_tc, settle_auto=base.settle_auto,
                 auto_range=base.auto_range, backlash_um=base.backlash_um, extra_settle_ms=base.extra_settle_ms,
@@ -2269,6 +2297,193 @@ class MainWindow(QtWidgets.QMainWindow):
         self.error("Line scan aborted (what was measured is saved):\n\n" + tb)
 
     # ---------------------------------------------------------------- point sweeps
+    # ---------------------------------------------------------------- Line tab
+    def build_line_tab(self, lay):
+        ln = self.config.get("line", {}) or {}
+
+        def um(v):
+            w = SISpinBox(1e-6, "µm")
+            w.setRange(-1e6, 1e6)
+            w.setDecimals(2)
+            w.setValue(float(v))
+            w.valueChanged.connect(self._line_tab_changed)
+            return w
+        g = QtWidgets.QGroupBox("Line (µm from the origin)")
+        f = QtWidgets.QFormLayout(g)
+        self.ln_x0, self.ln_y0 = um(ln.get("x0", 0.0)), um(ln.get("y0", 0.0))
+        self.ln_x1, self.ln_y1 = um(ln.get("x1", 10.0)), um(ln.get("y1", 0.0))
+        for lab, a_, b_ in (("Start x, y", self.ln_x0, self.ln_y0),
+                            ("End x, y", self.ln_x1, self.ln_y1)):
+            row = QtWidgets.QHBoxLayout()
+            row.addWidget(a_)
+            row.addWidget(b_)
+            f.addRow(lab, row)
+        fill = QtWidgets.QPushButton("Take the line drawn on the map")
+        fill.setToolTip("Draw it first: Draw ▾ → Line to scan along (on a map, or on the "
+                        "calibrated camera image), then press this or 'Use this line'.")
+        fill.clicked.connect(self.scan_line)
+        f.addRow(fill)
+        self.ln_len = QtWidgets.QLabel("-")
+        f.addRow("Length", self.ln_len)
+        lay.addWidget(g)
+
+        g = QtWidgets.QGroupBox("Measurement")
+        f = QtWidgets.QFormLayout(g)
+        self.ln_step = SISpinBox(1e-9, "nm")
+        self.ln_step.setRange(10, 1e6)
+        self.ln_step.setDecimals(1)
+        self.ln_step.setSingleStep(100)
+        self.ln_step.setValue(float(ln.get("step_nm", 200.0)))
+        self.ln_step.valueChanged.connect(self._line_tab_changed)
+        f.addRow("Step (nm)", self.ln_step)
+        self.ln_navg = QtWidgets.QSpinBox()
+        self.ln_navg.setRange(1, 1000)
+        self.ln_navg.setValue(int(ln.get("n_avg", 1)))
+        self.ln_navg.setToolTip("Readings per point, about one time constant apart; the "
+                                "mean is saved and the spread (standard deviation) as the "
+                                "error bar. 1 = one reading per point, like a map.")
+        self.ln_navg.valueChanged.connect(self._line_tab_changed)
+        f.addRow("Readings per point", self.ln_navg)
+        lay.addWidget(g)
+
+        g = QtWidgets.QGroupBox("Series: one line per value")
+        f = QtWidgets.QFormLayout(g)
+        self.ln_kind = QtWidgets.QComboBox()
+        self.ln_kind.addItem("Nothing (one line)", "none")
+        self.ln_kind.addItem("Bias (V)", "bias")
+        self.ln_kind.addItem("Laser power on sample (µW)", "power")
+        self.ln_kind.setCurrentIndex(max(self.ln_kind.findData(ln.get("kind", "none")), 0))
+        self.ln_vals = QtWidgets.QLineEdit(str(ln.get("values", "")))
+        self.ln_vals.setToolTip("Bias in V or power on the sample in µW, e.g. "
+                                "-1:1:0.25  or  1:100:*2  or  0, 0.5, 1")
+        self.ln_vals.setEnabled(self.ln_kind.currentData() != "none")
+        self.ln_kind.currentIndexChanged.connect(
+            lambda *_: (self.ln_vals.setEnabled(self.ln_kind.currentData() != "none"),
+                        self._line_tab_changed()))
+        self.ln_vals.editingFinished.connect(self._line_tab_changed)
+        f.addRow("Change", self.ln_kind)
+        f.addRow("Values", self.ln_vals)
+        lay.addWidget(g)
+
+        self.ln_eta = QtWidgets.QLabel("-")
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(QtWidgets.QLabel("Est. time"))
+        row.addWidget(self.ln_eta, 1)
+        row.addWidget(self._help_btn(
+            "Line scan",
+            "A scan along one straight line, with its own start / end, step, readings per "
+            "point and series (separate from the map).\n\n"
+            "• Start and end are in µm from the origin (0, 0). Type them, or draw the line "
+            "on a map or the calibrated camera image (Draw ▾ → Line to scan along) and press "
+            "'Use this line'.\n"
+            "• Readings per point: 1 = like a map; more = the mean and its spread (error "
+            "bars), readings about one time constant apart.\n"
+            "• Timing (wait), laser power and preamp settings come from the Map and "
+            "Instruments tabs.\n"
+            "• The result appears in the Plot tab and is saved like a map (own folder, "
+            "CSV, PNG)."))
+        lay.addLayout(row)
+        lay.addStretch(1)
+        self._line_tab_changed()
+
+    def _line_tab_changed(self, *_):
+        if not hasattr(self, "ln_eta"):
+            return
+        L = float(np.hypot(self.ln_x1.value() - self.ln_x0.value(),
+                           self.ln_y1.value() - self.ln_y0.value()))
+        step = self.ln_step.value() / 1000
+        n = max(int(round(L / step)), 1) + 1 if step > 0 else 0
+        self.ln_len.setText(f"{L:.2f} µm, {n} points")
+        try:
+            outer, vals = self._line_series()
+            nb = len(vals)
+        except Exception:
+            nb = None
+        try:
+            taus = list(getattr(self, "_tau", {0: 0.1}).values()) or [0.1]
+            poles = getattr(self, "_poles_now", [4] * len(taus))
+            from scanner import pixel_wait
+            sw = ScanSettings(settle_auto=self.settle_auto.isChecked(),
+                              settle_tc=self.settle.value(), extra_settle_ms=self.extra.value())
+            wait = pixel_wait(sw, taus, (list(poles) + [4] * len(taus))[:len(taus)])
+            per = wait + 0.03 + (self.ln_navg.value() - 1) * max(max(taus), 0.03)
+            self.ln_eta.setText("check the series values" if nb is None else
+                                f"{n * (nb or 1)} points ≈ {n * (nb or 1) * per / 60:.1f} min")
+        except Exception:
+            self.ln_eta.setText("-")
+        vals = {"x0": self.ln_x0.value(), "y0": self.ln_y0.value(), "x1": self.ln_x1.value(),
+                "y1": self.ln_y1.value(), "step_nm": self.ln_step.value(),
+                "n_avg": self.ln_navg.value(), "kind": self.ln_kind.currentData(),
+                "values": self.ln_vals.text()}
+        if vals != (self.config.get("line") or {}):
+            for k, v in vals.items():
+                self._save_setting("line", k, v)
+
+    def _fill_line_tab(self, start_stage, end_stage):
+        """Put a line (stage µm) into the Line tab as µm from the origin, and show it."""
+        if self.origin_xy is None:
+            self.error("Set the origin first (Map tab).")
+            return
+        (u0, v0), (u1, v1) = (self.stage_to_user(*start_stage),
+                              self.stage_to_user(*end_stage))
+        for w, val in ((self.ln_x0, u0), (self.ln_y0, v0), (self.ln_x1, u1), (self.ln_y1, v1)):
+            w.setValue(round(float(val), 2))
+        self.side_tabs.setCurrentIndex(1)
+        self.statusBar().showMessage("Line put into the Line tab - set step, readings and "
+                                     "series there, then Start line.")
+
+    def start_line_tab(self):
+        if self.origin_xy is None:
+            self.error("Set the origin first (Map tab).")
+            return
+        a = self.to_stage(self.ln_x0.value(), self.ln_y0.value())
+        b = self.to_stage(self.ln_x1.value(), self.ln_y1.value())
+        if np.hypot(b[0] - a[0], b[1] - a[1]) <= 0:
+            self.error("Start and end of the line are the same point.")
+            return
+        self.start_line(a, b)
+
+    # ---------------------------------------------------------------- live position
+    def _stage_to_map(self, d, X, Y):
+        """Stage position -> the axes of map d (undoes the scan rotation)."""
+        st = d.settings
+        a = getattr(st, "angle_deg", 0.0) or 0.0
+        if a:
+            c, s_ = np.cos(np.radians(a)), np.sin(np.radians(a))
+            dx, dy = X - st.x_center, Y - st.y_center
+            X, Y = st.x_center + c * dx + s_ * dy, st.y_center - s_ * dx + c * dy
+        ox, oy, sx, sy = self._frame(d)
+        return sx * (X - ox), sy * (Y - oy)
+
+    def _poll_position(self):
+        """Where the laser is now (joystick), from the origin; a cross on the maps."""
+        if self.origin_xy is None or self._busy() or not self.isVisible():
+            if self.origin_xy is None:
+                self.here_lab.setText("")
+            return
+        try:
+            X, Y = self.hw.stage.position(quiet=True)
+        except TypeError:                       # a stage without the quiet option
+            X, Y = self.hw.stage.position()
+        except Exception:
+            self.here_lab.setText("Laser now: (stage not answering)")
+            return
+        u, v = self.stage_to_user(X, Y)
+        self.here_lab.setText(f"Laser now at ({u:+.2f}, {v:+.2f}) µm from the origin, "
+                              f"{np.hypot(u, v):.2f} µm away")
+        if self.data is None:
+            return
+        if not self.here_marks:
+            for p in (self.pc_panel, self.r_panel):
+                m = pg.TargetItem(size=14, movable=False, symbol="crosshair",
+                                  pen=pg.mkPen("#00e5ff", width=2))
+                m.setZValue(50)
+                p.plot.addItem(m)
+                self.here_marks.append(m)
+        mu, mv = self._stage_to_map(self.data, X, Y)
+        for m in self.here_marks:
+            m.setPos(mu, mv)
+
     def build_sweep_tab(self, lay):
         sw = self.config.get("sweep", {}) or {}
         g = QtWidgets.QGroupBox("Where")
@@ -2361,7 +2576,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.update_sweep_eta()
 
     def _side_tab_changed(self, i):
-        self.start_btn.setText({1: "Start sweep", 2: "Start I–V"}.get(i, "Start scan"))
+        self.start_btn.setText({1: "Start line", 2: "Start sweep",
+                                3: "Start I–V"}.get(i, "Start scan"))
         if i == 1:
             self._show_spot()
             self._sweep_kind_changed()
@@ -2798,9 +3014,12 @@ class MainWindow(QtWidgets.QMainWindow):
             self.error("Wait for the autofocus to finish.")
             return
         if self.side_tabs.currentIndex() == 1:
-            self.start_sweep()
+            self.start_line_tab()
             return
         if self.side_tabs.currentIndex() == 2:
+            self.start_sweep()
+            return
+        if self.side_tabs.currentIndex() == 3:
             self.start_iv()
             return
         try:
