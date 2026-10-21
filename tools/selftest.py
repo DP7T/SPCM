@@ -670,6 +670,10 @@ if HAVE_QT:
         w._poll_position()
         assert "+2.00, -1.50" in w.here_lab.text(), w.here_lab.text()
         print("      " + w.here_lab.text())
+        w.side_tabs.setCurrentIndex(0)
+        w.tabs.setCurrentIndex(0)
+        w.side_tabs.widget(0).ensureWidgetVisible(w.here_lab)
+        shot("map_position")
         # camera: calibrate, then draw a frame and a line on it
         if getattr(w, "cam_tab", None) is not None:
             w.tabs.setCurrentWidget(w.cam_tab)
