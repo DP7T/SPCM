@@ -7,6 +7,8 @@
 - Phase window: **Phase lag** view - how many degrees each pixel is behind / ahead of the
   common phase (where the signal is clear), and what 1° means in µs at the chopping
   frequency (read from the lock-in)
+- Fixed: the phase sign rule now follows the previous map right away (1.2.5 only picked up
+  the last angle after restarting the program)
 
 ## 1.2.5 (pre-release)
 - Phase: strong pixels whose phase doesn't fit are ignored (spikes); the sign follows the

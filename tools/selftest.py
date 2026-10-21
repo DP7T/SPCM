@@ -551,6 +551,17 @@ if HAVE_QT:
         pd.grab().save(os.path.join(OUT, "screen_phase_lag.png"))
         pd.save()
         pd.close()
+        # the next map follows the angle just used (in the same session, no restart)
+        assert abs(w._phase_ref() - pd.ang.value()) < 0.01, (w._phase_ref(), pd.ang.value())
+        w.start()
+        t0 = time.time()
+        while w.thread is not None and time.time() - t0 < 120:
+            pump(0.2)
+        msg2 = w.phase_dialog.res.get("message", "")
+        print("      second map: " + msg2.split("Sign")[0][-60:] + "| " +
+              ("follows the first map" if "sign as in your earlier" in msg2 else msg2))
+        assert "sign as in your earlier" in msg2 and "FAR" not in msg2, msg2
+        w.phase_dialog.close()
         # cursors on the map
         w.cpt_btn.setChecked(True)
         w.cln_btn.setChecked(True)

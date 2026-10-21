@@ -3182,7 +3182,7 @@ class MainWindow(QtWidgets.QMainWindow):
             res["ref_used"] = ref
             saved = phase.write_copy(d, res) if res.get("ok") else None
             if saved:
-                self._save_setting("phase", "last_deg", float(res["phase_deg"]))
+                self._remember_angle(res["phase_deg"])
         except Exception as e:
             self.toast(f"Phase correction failed: {e}", "warn")
             return
@@ -3193,6 +3193,15 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.phase_dialog.close()
             self.phase_dialog = PhaseDialog(self, d, res, saved)
             self.phase_dialog.show()
+
+    def _remember_angle(self, deg):
+        """Remember the angle used, for the sign of the next map: in config.yaml and in
+        the running program (so it counts at once, not only after a restart)."""
+        ph = self.config.get("phase")
+        if not isinstance(ph, dict):
+            ph = self.config["phase"] = {}
+        ph["last_deg"] = float(deg)
+        self._save_setting("phase", "last_deg", float(deg))
 
     def _phase_ref(self):
         """The angle used last time (sign convention for the next file), or None."""
@@ -3730,7 +3739,7 @@ class PhaseDialog(QtWidgets.QDialog):
         try:
             self.saved = phase.write_copy(self.d, res)
             self.res = res
-            self.win._save_setting("phase", "last_deg", float(res["phase_deg"]))
+            self.win._remember_angle(res["phase_deg"])
             self._status()
             self.win.toast(f"Phase-corrected copy saved ({res['phase_deg']:+.1f}°)", "info")
         except Exception as e:
