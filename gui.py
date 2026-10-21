@@ -595,7 +595,7 @@ class MainWindow(QtWidgets.QMainWindow):
         left.addWidget(g)
 
         left = scan_lay
-        g = QtWidgets.QGroupBox("Series: one map (or line) per value")
+        g = QtWidgets.QGroupBox("Series: one map per value")
         f = QtWidgets.QFormLayout(g)
         ser = config.get("series", {}) or {}
         self.ser_kind = QtWidgets.QComboBox()
