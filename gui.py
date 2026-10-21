@@ -475,6 +475,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.origin_lab.setStyleSheet("color:gray")
         f.addRow(self.origin_lab)
         self.here_lab = QtWidgets.QLabel("")
+        self.here_lab.setWordWrap(True)
         self.here_lab.setToolTip("Where the laser is now, from the origin (0, 0), updated "
                                  "while you move with the joystick. Also shown as a cross "
                                  "on the maps.")
@@ -2469,8 +2470,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.here_lab.setText("Laser now: (stage not answering)")
             return
         u, v = self.stage_to_user(X, Y)
-        self.here_lab.setText(f"Laser now at ({u:+.2f}, {v:+.2f}) µm from the origin, "
-                              f"{np.hypot(u, v):.2f} µm away")
+        self.here_lab.setText(f"Laser now: ({u:+.2f}, {v:+.2f}) µm, "
+                              f"{np.hypot(u, v):.2f} µm from the origin")
         if self.data is None:
             return
         if not self.here_marks:
