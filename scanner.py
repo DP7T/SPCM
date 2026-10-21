@@ -887,13 +887,9 @@ class ScanWorker(QtCore.QObject):
 
     # ------------------------------------------------------------ step mode
     def _read_both(self):
-        """Read both lock-ins at the same time (saves one GPIB round trip)."""
-        if not hasattr(self, "_pool"):
-            from concurrent.futures import ThreadPoolExecutor
-            self._pool = ThreadPoolExecutor(2)
-        f1 = self._pool.submit(self.hw.lockin_pc.read)
-        f2 = self._pool.submit(self.hw.lockin_refl.read)
-        return f1.result(), f2.result()
+        """Read both lock-ins, one after the other: they share the GPIB bus, and reading
+        them at the same time from two threads could mix their replies."""
+        return self.hw.lockin_pc.read(), self.hw.lockin_refl.read()
 
     def _step_line(self, ib, iy, forward, wait):
         d, hw, nx = self.data, self.hw, len(self.data.xs)

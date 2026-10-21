@@ -298,6 +298,42 @@ def _():
     print(f"      point and line read; line has {len(ln['distance'])} points; CSV columns match info.txt")
 
 
+@check("lock-ins: one at a time on the GPIB bus; a garbled reply is read again")
+def _():
+    import threading
+    import instruments
+
+    class FakeInst:
+        def __init__(self, replies):
+            self.replies, self.cleared, self.busy, self.overlap = list(replies), 0, False, 0
+
+        def query(self, cmd):
+            if self.busy:                       # two threads at once on the bus
+                self.overlap += 1
+            self.busy = True
+            time.sleep(0.002)
+            self.busy = False
+            return self.replies.pop(0) if self.replies else "1e-9,2e-9,3e-9,45.0"
+
+        def clear(self):
+            self.cleared += 1
+
+    li = object.__new__(instruments.SR830)
+    li.name = "test lock-in"
+    li.inst = FakeInst(["1e-9,2e-9,3e-9,-38.370.000156404", "1e-9,2e-9,3e-9,12.5"])
+    v = li.read()                               # the garbled reply from the lab
+    assert v[3] == 12.5 and li.inst.cleared == 1, (v, li.inst.cleared)
+    # two lock-in objects sharing one bus, read from two threads: never at the same time
+    bus = FakeInst([])
+    a, b = object.__new__(instruments.SR830), object.__new__(instruments.SR830)
+    a.name, b.name, a.inst, b.inst = "a", "b", bus, bus
+    ts = [threading.Thread(target=lambda o=o: [o.read() for _ in range(30)]) for o in (a, b)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert bus.overlap == 0, bus.overlap
+    print("      garbled reply read again; no overlapping bus access from two threads")
+
+
 @check("stage: a move that stops off target is retried once, then refused")
 def _():
     import instruments

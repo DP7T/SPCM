@@ -1,6 +1,13 @@
 # Changelog
 
-## 1.2.6 (in testing)
+## 1.2.7 (in testing)
+- Fixed: a scan could stop with "could not convert string to float" (seen in 1.2.5, the
+  problem was there since 0.9): the two lock-ins were read at the same time and their
+  replies on the shared GPIB bus could mix. They are now read one after the other, and a
+  reply that still comes out garbled is read again (up to 3 times, noted in
+  spcm_error.log) instead of stopping the scan
+
+## 1.2.6 (pre-release)
 - **Point and line cursors** (Draw ▾): values of the nearest measured pixel at a point or
   along a line (sampled at the scan step), shown on both maps, for every map of a series,
   uncorrected and phase-corrected; Save → CSV + info.txt in `<name>_cursors/`
