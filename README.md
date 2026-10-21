@@ -188,22 +188,12 @@ clearly above the noise (5×), finds the direction of that line, and rotates X a
 one angle for the whole map (and for all maps of a series, so sign changes with bias stay).
 
 - **Spikes:** strong pixels whose phase doesn't fit the line are ignored (red × in the plot).
-- **Sign** (a line has two directions, 180° apart): the program remembers, per **sample
-  name**, the total phase = lock-in PHASE (read from the front panel, saved with every file)
-  + correction. On the same sample it takes the direction that matches last time, so the sign
-  convention stays the same across files, even if the lock-in PHASE was changed or reset in
-  between. A new sample (or a total more than 30° from last time, with a warning: a cable,
-  the SR570 setting, the chopping frequency or the contacts changed?) uses the direction in
-  which most of the signal is positive.
-- **Hint at the start:** on a sample measured before, if the lock-in PHASE differs from last
-  time, a message tells you the PHASE that was used then. Setting it is optional (by hand on
-  the front panel; the program never changes it). A good habit: autophase once per device on
-  a strong spot, then leave it.
-- **Y left over**: the window says how much signal is left in Y (e.g. "3 % of the signal,
-  ≈ 1.8° phase spread"). Strong features still visible in Y have a slightly different
-  phase (response delay); they are not lost from X (X keeps cos of that angle: 99.97 % at
-  1.5°). **Phase lag** view: the lag of every pixel in degrees, with the time it means at
-  the chopping frequency.
+- **Sign** (a line has two directions, 180° apart): the program takes the one closest to the
+  angle it used last time. As long as the lock-in phase, cables, SR570 setting and chopping
+  frequency are unchanged, the right angle stays about the same, so every file gets the same
+  sign convention. The first time, or if the new angle is more than 30° from the last one
+  (then you get a warning: something was changed), it takes the direction in which most of
+  the signal is positive.
 - **Series:** each map is also fitted on its own, only as a check; if the angles differ by
   more than their uncertainty, the window warns that the phase may change with bias / power.
 
@@ -219,6 +209,8 @@ one angle for the whole map (and for all maps of a series, so sign changes with 
   mean X, Y is subtracted first. You can also type the angle, press **Auto**, then **Save
   corrected copy**, or **No copy** to delete it.
 - If there is no clear signal, no copy is made (just a short message).
+- **Phase lag** view (list at the bottom left of the window): the lag of every pixel in
+  degrees relative to the common phase, and what 1° means in µs at the chopping frequency.
 - *File → Phase correction of the shown map / line…* opens the window again later.
 
 ## Point and line cursors (reading values)
@@ -280,7 +272,7 @@ In the window:
 
 `sample_date_size_step_power_number`, for example `flakeA_20261015_20x20um_500nm_10uW_001`
 
-- **File name** (Save box): pick another pattern from the list or type your own. **Add ▾** inserts fields: sample, date, time, size, step, power on the sample, bias, scan mode, the **lock-in phase** (photocurrent lock-in, as set on its front panel, e.g. `127deg`), type and the running number `{n}`. It also offers every quantity from the **Experiment notes** tab, such as `{Temperature}` or `{Polarization}`. The grey line under it shows the next name.
+- **File name** (Save box): pick another pattern from the list or type your own. **Add ▾** inserts fields: sample, date, time, size, step, power on the sample, bias, scan mode, type and the running number `{n}`. It also offers every quantity from the **Experiment notes** tab, such as `{Temperature}` or `{Polarization}`. The grey line under it shows the next name.
 - The power in the name is the target power if *Set the laser power before each scan* is ticked, otherwise what the meter reads at the start. `{n}` counts up (001, 002 …) so a name is never used twice.
 
 Inside each measurement folder:

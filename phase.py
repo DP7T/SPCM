@@ -51,8 +51,7 @@ def _wrap(a):
     return (a + 180.0) % 360.0 - 180.0
 
 
-def find_phase(X, Y, subtract_background=False, substrate=None, ref_deg=None,
-               ref_what="this sample"):
+def find_phase(X, Y, subtract_background=False, substrate=None, ref_deg=None):
     """X, Y: processed photocurrent, shape (maps, ...) or any shape, NaN allowed.
     subtract_background: subtract the mean X, Y of the bare substrate, which is
     `substrate` (a True/False mask of the same shape, marked by the user on the map)
@@ -131,15 +130,15 @@ def find_phase(X, Y, subtract_background=False, substrate=None, ref_deg=None,
         if abs(_wrap(phi + 180.0 - ref_deg)) < abs(_wrap(phi - ref_deg)):
             phi += 180.0
         if abs(_wrap(phi - ref_deg)) <= REF_MAX_DEG:
-            rule = f"sign as last time for {ref_what} (correction then: {ref_deg:+.1f}°)"
+            rule = f"sign as in your earlier measurements (last angle {ref_deg:+.1f}°)"
         else:
             phi = _majority(phi, x[use], y[use])
-            rule = (f"FAR from what {ref_what} needed last time ({ref_deg:+.1f}° at this "
-                    "lock-in phase) - was a cable, the SR570 setting, the chopping frequency "
-                    "or the contacts changed? Sign: most of the signal positive")
+            rule = (f"FAR from your last angle {ref_deg:+.1f}° - was the lock-in phase, a "
+                    "cable, the SR570 setting or the chopping frequency changed? Sign: most "
+                    "of the signal positive")
     else:
         phi = _majority(phi, x[use], y[use])
-        rule = f"sign: most of the signal positive (nothing earlier to follow for {ref_what})"
+        rule = "sign: most of the signal positive (no earlier angle to follow)"
     phi = float(_wrap(phi))
     xr, yr = rotate(x[use], y[use], phi)
     spread = float(np.sqrt(np.mean(yr ** 2)) / max(np.sqrt(np.mean(xr ** 2)), 1e-300))
@@ -166,20 +165,15 @@ def find_phase(X, Y, subtract_background=False, substrate=None, ref_deg=None,
                 inconsistent.append(k)
     out["per_map"] = per
     out["inconsistent_maps"] = inconsistent
-    left = spread * 100                                   # Y left over, % of the signal
-    lag = float(np.degrees(np.arctan(spread)))            # = phase spread across the map
     if yrms_noise <= 3:
-        q = "that is about the noise"
+        q = "one clear phase (Y after the correction is only noise)"
     elif spread < 0.2:
-        q = ("features have slightly different phases (different response delays) - "
-             "not lost signal: X keeps cos of that angle, e.g. 99.97 % at 1.5°")
+        q = "clear phase, Y after the correction is a little above the noise"
     else:
-        q = ("CHECK: large - not all signal has one phase (background pickup, or the phase "
-             "changed during the scan?)")
-    out["y_left_pct"], out["phase_spread_deg"] = left, lag
-    msg = (f"Phase {phi:+.1f}° ± {err:.1f}° from {n} pixels above {SIGNAL_SIGMA:g}× noise "
-           f"(same as raising the lock-in PHASE by {phi:.1f}°). Y left over: {left:.1f} % of "
-           f"the signal (≈ {lag:.1f}° phase spread across the map) - {q}.")
+        q = ("CHECK: Y after the correction is well above the noise - not all signal has "
+             "the same phase (background pickup, or the phase changed during the scan?)")
+    msg = (f"Phase {phi:+.1f}° ± {err:.1f}° from {n} pixels above {SIGNAL_SIGMA:g}× noise: {q}. "
+           f"(Same as raising the lock-in PHASE by {phi:.1f}°.)")
     if n_bad:
         msg += (f" {n_bad} strong pixel(s) ignored: their phase doesn't fit (spikes?), "
                 "red in the X–Y plot.")
@@ -193,28 +187,8 @@ def find_phase(X, Y, subtract_background=False, substrate=None, ref_deg=None,
     return out
 
 
-def lockin_phase(d):
-    """Front-panel phase of the photocurrent lock-in when the file was measured (deg),
-    or None for files from before 1.2.6."""
-    for mi in (getattr(d, "map_info", None) or []):
-        v = (mi or {}).get("phase_pc_deg")
-        if v is not None and np.isfinite(v):
-            return float(v)
-    return None
-
-
-def add_totals(res, d):
-    """Add the lock-in phase and the total phase (lock-in + correction): the total
-    belongs to the device and the setup, not to where the PHASE knob happens to be."""
-    lp = lockin_phase(d)
-    res["lockin_phase_deg"] = lp
-    res["total_phase_deg"] = (None if (lp is None or not res.get("ok"))
-                              else float(_wrap(lp + res["phase_deg"])))
-    return res
-
-
 def lag_map(X, Y, phi, offset=(0.0, 0.0), noise=None):
-    """Phase lag of every pixel relative to the line (deg, -90..90): atan(Y'/X').
+    """Phase lag of every pixel relative to the common phase (deg, -90..90): atan(Y'/X').
     Only where the signal is above SIGNAL_SIGMA x noise, NaN elsewhere."""
     Xr, Yr = rotate(X, Y, phi, offset)
     lag = np.degrees(np.arctan(Yr / np.where(Xr == 0, np.nan, Xr)))
@@ -254,10 +228,8 @@ def make_copy(d, res):
     c.pc[..., 2] = np.hypot(Xr, Yr) / fac
     c.pc[..., 3] = np.degrees(np.arctan2(Yr, Xr))
     c.phase = {k: res[k] for k in ("phase_deg", "phase_err_deg", "offset", "noise",
-                                   "n_signal", "n_rejected", "spread", "y_left_pct",
-                                   "phase_spread_deg", "lockin_phase_deg", "total_phase_deg",
-                                   "subtract_background", "background_from", "sign_rule",
-                                   "message") if k in res and res[k] is not None}
+                                   "n_signal", "n_rejected", "spread", "subtract_background",
+                                   "background_from", "sign_rule", "message") if k in res}
     c.phase["source_file"] = os.path.basename(d.path or "")
     c.phase["offset_unit"] = pc_scale(d.settings)[1] or getattr(d.settings, "lockin_unit", "V")
     c.path = copy_path(d.path)

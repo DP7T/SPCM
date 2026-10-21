@@ -1206,12 +1206,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._save_setting("power_lock", "enabled", bool(on))
 
     def _save_setting(self, section, key, value):
-        """Write one value to config.yaml so it is remembered next time (and keep the
-        running window's copy of the settings up to date)."""
-        sec = self.config.get(section)
-        if not isinstance(sec, dict):
-            sec = self.config[section] = {}
-        sec[key] = value
+        """Write one value to config.yaml so it is remembered next time."""
         if not self.config_path:
             return
         try:
@@ -1789,15 +1784,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 except Exception:
                     poles = 4
                 self._poles_now.append(poles)
-                try:
-                    ph = float(li.phase())
-                except Exception:
-                    ph = None
-                if li is self.hw.lockin_pc:
-                    self._phase_now = ph
                 lab.setText(f"τ = {si(tau, 's')}, {6 * poles} dB/oct\n"
-                            f"sens = {si(li.sensitivity(), 'V/A')}"
-                            + (f", phase {ph:.2f}°" if ph is not None else ""))
+                            f"sens = {si(li.sensitivity(), 'V/A')}")
         except Exception as e:
             self.statusBar().showMessage(f"Lock-in read failed: {e}")
         self.update_eta()
@@ -2194,7 +2182,6 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self._switch_reminder("map"):     # lock-in measurement
             return
         self.refresh_lockins()
-        self._phase_hint(s.sample)
         self.remember_experiment()
         self.worker = ScanWorker(self.hw, s, self.folder.text() or "data",
                                  self.config.get("power_lock", {}) or {},
@@ -2841,7 +2828,6 @@ class MainWindow(QtWidgets.QMainWindow):
             self.error(f"Could not read the stage position:\n{e}")
             return
         self.refresh_lockins()
-        self._phase_hint(s.sample)
         self.remember_experiment()
         self.remember_scan(s)
         self.worker = ScanWorker(self.hw, s, self.folder.text() or "data",
@@ -2981,9 +2967,6 @@ class MainWindow(QtWidgets.QMainWindow):
              "date": time.strftime("%Y%m%d"), "time": time.strftime("%H%M"),
              "type": {"map": "map", "line": "line"}.get(kind, kind.replace("_", "") + "sweep")}
         v.update({k: val for k, val in self.experiment_fields()})
-        ph = getattr(self, "_phase_now", None)       # read with the lock-ins (Refresh / Start)
-        if ph is not None:
-            v["phase"] = naming.num(ph, "deg")
         if kind == "iv":
             v["type"] = "IV"
             if s is not None:
@@ -3194,13 +3177,12 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         try:
             X, Y = phase.processed_xy(d)
-            ref = self._phase_ref(d)
-            res = phase.find_phase(X, Y, ref_deg=ref, ref_what="this sample")
+            ref = self._phase_ref()
+            res = phase.find_phase(X, Y, ref_deg=ref)
             res["ref_used"] = ref
-            phase.add_totals(res, d)
             saved = phase.write_copy(d, res) if res.get("ok") else None
             if saved:
-                self._remember_phase(d, res)
+                self._save_setting("phase", "last_deg", float(res["phase_deg"]))
         except Exception as e:
             self.toast(f"Phase correction failed: {e}", "warn")
             return
@@ -3212,42 +3194,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self.phase_dialog = PhaseDialog(self, d, res, saved)
             self.phase_dialog.show()
 
-    def _phase_totals(self):
-        return dict((self.config.get("phase", {}) or {}).get("by_sample", {}) or {})
-
-    def _phase_ref(self, d):
-        """The correction this sample needed last time, converted to the lock-in phase
-        of this file: total phase (lock-in + correction) remembered per sample name,
-        minus this file's lock-in phase. None for a new sample or an old file."""
-        import phase
-        total = self._phase_totals().get(str(d.settings.sample))
-        lp = phase.lockin_phase(d)
-        if total is None or lp is None:
-            return None
-        return float(phase._wrap(float(total) - lp))
-
-    def _remember_phase(self, d, res):
-        if res.get("total_phase_deg") is None:
-            return
-        t = self._phase_totals()
-        t[str(d.settings.sample)] = round(float(res["total_phase_deg"]), 2)
-        self._save_setting("phase", "by_sample", t)
-
-    def _phase_hint(self, sample):
-        """At the start: tell how this sample was phased last time (the lock-in is only
-        read; the user sets it by hand if wanted)."""
-        import phase
-        total = self._phase_totals().get(str(sample))
-        now = getattr(self, "_phase_now", None)
-        if total is None or now is None:
-            return
-        need = float(phase._wrap(float(total) - now))
-        if abs(need) > 5:
-            self.toast(f"{sample}: last time the total phase was {float(total):.1f}°. The "
-                       f"lock-in is at {now:.1f}°, so the correction will be about "
-                       f"{need:+.1f}°. To start like last time, set the lock-in PHASE to "
-                       f"{float(total):.1f}° (optional - the correction works either way).",
-                       "info")
+    def _phase_ref(self):
+        """The angle used last time (sign convention for the next file), or None."""
+        v = (self.config.get("phase", {}) or {}).get("last_deg")
+        return float(v) if v is not None else None
 
     def phase_shown(self):
         """Open the phase correction for the map / line shown now."""
@@ -3263,10 +3213,7 @@ class MainWindow(QtWidgets.QMainWindow):
                        "measurement to correct it again.")
             return
         X, Y = phase.processed_xy(d)
-        ref = self._phase_ref(d)
-        res = phase.find_phase(X, Y, ref_deg=ref, ref_what="this sample")
-        res["ref_used"] = ref
-        phase.add_totals(res, d)
+        res = phase.find_phase(X, Y, ref_deg=self._phase_ref())
         cp = phase.copy_path(d.path)
         if getattr(self, "phase_dialog", None) is not None:
             self.phase_dialog.close()
@@ -3558,7 +3505,7 @@ class PhaseDialog(QtWidgets.QDialog):
         import phase
         self.win, self.d, self.res = win, d, dict(res)
         # the angle remembered BEFORE this file (the sign convention to follow)
-        self.ref = res["ref_used"] if "ref_used" in res else win._phase_ref(d)
+        self.ref = res["ref_used"] if "ref_used" in res else win._phase_ref()
         self.setWindowTitle("SPCM – phase correction")
         self.resize(900, 560)
         self.X, self.Y = phase.processed_xy(d)
@@ -3662,20 +3609,6 @@ class PhaseDialog(QtWidgets.QDialog):
         self.del_btn.setToolTip("Delete the corrected copy (the measurement itself stays)")
         self.del_btn.clicked.connect(self.no_copy)
         row.addWidget(self.del_btn)
-        row.addWidget(win._help_btn(
-            "Phase correction",
-            "All real photocurrent has (nearly) one phase, so in the X–Y plot its pixels lie "
-            "on one line through zero. The program finds that line from the pixels well above "
-            "the noise and rotates X and Y by its angle - the same as turning the lock-in "
-            "PHASE, but afterwards. One angle for the whole map / series.\n\n"
-            "Nothing is lost: R stays the same, and the raw readings are kept. If a feature "
-            "is 1.5° away from the common phase, 2.6 % of it shows up in Y (sin 1.5°) and X "
-            "keeps 99.97 % of it (cos 1.5°). That is why you can still recognise strong "
-            "features in Y: it shows which features respond with a slightly different delay "
-            "('Phase lag' view).\n\n"
-            "Sign: the same as last time for this sample (the total phase = lock-in PHASE + "
-            "correction is remembered per sample name); for a new sample, most of the signal "
-            "positive. Strong pixels whose phase doesn't fit (spikes) are ignored (red ×)."))
         lay.addLayout(row)
         style_plots(glw, bool((win.config.get("ui", {}) or {}).get("dark", False)))
         self.saved = saved
@@ -3728,9 +3661,7 @@ class PhaseDialog(QtWidgets.QDialog):
     def recompute(self, *_):
         import phase
         self.res = phase.find_phase(self.X, self.Y, self.bg.isChecked(),
-                                    self._substrate_mask(), ref_deg=self.ref,
-                                    ref_what="this sample")
-        phase.add_totals(self.res, self.d)
+                                    self._substrate_mask(), ref_deg=self.ref)
         if self.res.get("ok"):
             self._set_angle(self.res["phase_deg"])
         self._status(" <i>(not saved yet)</i>")
@@ -3783,7 +3714,7 @@ class PhaseDialog(QtWidgets.QDialog):
             else:
                 sx = np.nanmax(np.abs(Xr)) if np.isfinite(Xr).any() else np.nan
                 self.p2.setTitle(f"Y after the correction (own scale, max {m / sx * 100:.0f} % "
-                                 "of X): noise, or features with a slightly different phase")
+                                 "of X): should look like noise")
             x0, x1 = float(self.ux[self.ix][0]), float(self.ux[self.ix][-1])
             y0, y1 = float(self.vy[self.iy][0]), float(self.vy[self.iy][-1])
             nx, ny = len(self.ux), len(self.vy)
@@ -3799,8 +3730,7 @@ class PhaseDialog(QtWidgets.QDialog):
         try:
             self.saved = phase.write_copy(self.d, res)
             self.res = res
-            phase.add_totals(res, self.d)
-            self.win._remember_phase(self.d, res)
+            self.win._save_setting("phase", "last_deg", float(res["phase_deg"]))
             self._status()
             self.win.toast(f"Phase-corrected copy saved ({res['phase_deg']:+.1f}°)", "info")
         except Exception as e:

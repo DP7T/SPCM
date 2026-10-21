@@ -231,10 +231,6 @@ class SR830:
     def sensitivity(self):
         return SR830_SENS[int(self.inst.query("SENS?"))]
 
-    def phase(self):
-        """Reference phase set on the front panel (degrees), read only."""
-        return float(self.inst.query("PHAS?"))
-
     def frequency(self):
         """Reference (chopping) frequency in Hz, read only."""
         return float(self.inst.query("FREQ?"))
@@ -561,11 +557,6 @@ class SimSR830:
     def sens_index(self):
         return self._si()
 
-    ph_deg = 0.0
-
-    def phase(self):
-        return self.ph_deg
-
     def frequency(self):
         return 1013.0
 
@@ -585,7 +576,7 @@ class SimSR830:
         pf = max(self.w.power_factor(), 0.0)
         # photocurrent grows a bit slower than linearly with power (α ≈ 0.85)
         sig *= pf ** 0.85 if self.role == "photocurrent" else pf
-        ph = np.deg2rad(phase - self.ph_deg)          # turning PHASE rotates X, Y
+        ph = np.deg2rad(phase)
         X = sig * np.cos(ph) + noise * self.w.rng.normal()
         Y = sig * np.sin(ph) + noise * self.w.rng.normal()
         fs = 1.09 * self.full_scale()                 # the outputs saturate like a real SR830

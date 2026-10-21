@@ -25,10 +25,6 @@ os.makedirs(OUT, exist_ok=True)
 FAILED = []
 
 
-def phase_wrap(a):
-    return (a + 180.0) % 360.0 - 180.0
-
-
 def check(name):
     def deco(fn):
         t = time.time()
@@ -555,23 +551,6 @@ if HAVE_QT:
         pd.grab().save(os.path.join(OUT, "screen_phase_lag.png"))
         pd.save()
         pd.close()
-        # per sample: the total phase is remembered; another lock-in phase on the same
-        # sample gives the matching correction with the same sign, no "FAR" warning
-        tot = w._phase_totals().get(w.sample.text() or "sample")
-        assert tot is not None, "total phase not remembered"
-        HW.lockin_pc.ph_deg = 50.0
-        w.start()
-        t0 = time.time()
-        while w.thread is not None and time.time() - t0 < 120:
-            pump(0.2)
-        pd2 = w.phase_dialog
-        a2 = pd2.ang.value()
-        print(f"      lock-in phase 50°: correction {a2:+.1f}° (total {50 + a2:.1f}°, "
-              f"before {tot:.1f}°)")
-        assert abs(phase_wrap(50 + a2 - tot)) < 3, (a2, tot)
-        assert "FAR" not in pd2.res.get("message", ""), pd2.res.get("message")
-        pd2.close()
-        HW.lockin_pc.ph_deg = 0.0
         # cursors on the map
         w.cpt_btn.setChecked(True)
         w.cln_btn.setChecked(True)
@@ -579,8 +558,7 @@ if HAVE_QT:
         assert w.cursor_dialog is not None and w.cursor_dialog.rp is not None
         rl = w.cursor_dialog.rl
         assert rl is not None and rl["corr"] is not None, "no corrected values on the line"
-        # correction -38°: corrected X' must follow X (same pixels, same sign)
-        xr, xc = rl["pc"][0][:, 0], rl["corr"][0][:, 0]
+        xr, xc = rl["pc"][0][:, 0], rl["corr"][0][:, 0]    # X' follows X (same pixels)
         assert np.nansum(xr * xc) > 0.5 * np.nansum(xr * xr), (xr, xc)
         shot("map_cursors")
         w.cursor_dialog.grab().save(os.path.join(OUT, "screen_cursor_dialog.png"))
@@ -595,11 +573,6 @@ if HAVE_QT:
         shot("save_box")
         assert w.name_preview.text().startswith("next map:"), w.name_preview.text()
         print("      " + w.name_preview.text())
-        import naming
-        w.refresh_lockins()
-        nm = naming.make_name("{sample}_{phase}_{n}", w._name_values("map"), OUT)
-        assert "deg" in nm, nm                          # lock-in phase in the file name
-        print("      with the lock-in phase: " + nm)
         # fine map across an electrode edge, then "Measure resolution"
         w.set_origin(0.0, 0.0)
         w.xc.setValue(1)

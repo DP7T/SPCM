@@ -3,11 +3,20 @@
 Read together with [AGENTS.md](AGENTS.md). Each item says what the user decided. Build them
 one at a time on `dev`, test on the microscope, then release as usual.
 
-Built in 1.2.6: point / line cursors, clearer phase wording, phase-lag map, phase memory per
-sample (with a start hint; the program still never writes the lock-in PHASE).
+Built in 1.2.6: point / line cursors, phase-lag view in the phase window.
+Rejected by the user (2026-10-21): phase memory per sample, the start hint, reading / saving
+the lock-in PHASE and the `{phase}` file-name field (that code is only on the branch
+`phase-memory-1.2.6`; don't bring it back without asking).
 
-## 1. Check the saved data
+## 1. Phase window: clearer wording (agreed earlier, not built)
+Instead of "Y after the correction is only noise" (a statistical test that can look wrong when
+Y still shows structure), give the number that matters, e.g. "Y left over: 3 % of the signal
+(≈ 1.5° phase spread across the map)". Background: on the real sample the residual Y was ~2-3 %
+of X with recognisable features; that is a small phase difference between features
+(sin 1.5° ≈ 2.6 % in Y, X keeps cos 1.5° = 99.97 %), not lost signal. Ask before building:
+the user chose to keep 1.2.5's phase behaviour and only add the phase-lag view.
+
+## 2. Check the saved data
 The user will look at saved files (h5, CSV, PNG, info.txt) and list what should change.
 Collect that list here before changing the file formats (Origin import must keep working,
 `scanner.load()` must keep reading old files).
-

@@ -1,20 +1,12 @@
 # Changelog
 
 ## 1.2.6 (in testing)
-- The **lock-in phase** (as set on the front panel) is now read and saved with every map,
-  line and point sweep (both lock-ins), shown in the Instruments tab, and can be put in the
-  file name: Add ▾ → *Lock-in phase* (`{phase}`, e.g. `127deg`). Only read, never changed
-- **Phase memory per sample**: the total phase (lock-in PHASE + correction) is remembered
-  per sample name; the sign follows that sample's last time, also if the PHASE knob was
-  changed or reset; a new sample uses "most of the signal positive" without a warning. At the
-  start, a hint shows the PHASE used last time on that sample (set it by hand if you want)
-- Phase window: says how much is left in Y ("3 % of the signal, ≈ 1.8° phase spread") instead
-  of "only noise"; **Phase lag** view (degrees per pixel, and µs at the chopping frequency);
-  "?" explains why nothing is lost
-- **Point and line cursors** (Draw ▾): values of the nearest pixel at a point or along a line,
-  on both maps, all maps of a series, uncorrected and phase-corrected; Save → CSV
-- Fixed: settings remembered during a session (e.g. the last phase) were only used after a
-  restart
+- **Point and line cursors** (Draw ▾): values of the nearest measured pixel at a point or
+  along a line (sampled at the scan step), shown on both maps, for every map of a series,
+  uncorrected and phase-corrected; Save → CSV + info.txt in `<name>_cursors/`
+- Phase window: **Phase lag** view - how many degrees each pixel is behind / ahead of the
+  common phase (where the signal is clear), and what 1° means in µs at the chopping
+  frequency (read from the lock-in)
 
 ## 1.2.5 (pre-release)
 - Phase: strong pixels whose phase doesn't fit are ignored (spikes); the sign follows the

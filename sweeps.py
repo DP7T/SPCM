@@ -23,14 +23,6 @@ from scanner import (QtCore, CHANNELS, pc_scale, signal_kind, pixel_wait,
 KINDS = {"power": "Power sweep", "bias": "Bias sweep", "bias_power": "Bias × power sweep"}
 
 
-def _phase(li):
-    """Front-panel reference phase (deg), read only; None if it can't be read."""
-    try:
-        return float(li.phase())
-    except Exception:
-        return None
-
-
 @dataclass
 class SweepSettings:
     kind: str = "power"             # "power", "bias" or "bias_power"
@@ -519,8 +511,6 @@ class SweepWorker(QtCore.QObject):
             d.info.update({"tau_pc_s": tau[0], "tau_refl_s": tau[1],
                            "sens_pc": hw.lockin_pc.sensitivity(),
                            "sens_refl": hw.lockin_refl.sensitivity(),
-                           "phase_pc_deg": _phase(hw.lockin_pc),
-                           "phase_refl_deg": _phase(hw.lockin_refl),
                            "slope_poles": list(poles), "settle_wait_s": wait,
                            "reading_spacing_s": spacing,
                            "sine_amplitude_before_V": amp0})
