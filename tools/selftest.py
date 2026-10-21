@@ -559,8 +559,8 @@ if HAVE_QT:
             pump(0.2)
         msg2 = w.phase_dialog.res.get("message", "")
         print("      second map: " + msg2.split("Sign")[0][-60:] + "| " +
-              ("follows the first map" if "sign as in your earlier" in msg2 else msg2))
-        assert "sign as in your earlier" in msg2 and "FAR" not in msg2, msg2
+              ("follows the first map" if "sign as in your earlier" in msg2.lower() else msg2))
+        assert "sign as in your earlier" in msg2.lower() and "FAR" not in msg2, msg2
         w.phase_dialog.close()
         # cursors on the map
         w.cpt_btn.setChecked(True)
