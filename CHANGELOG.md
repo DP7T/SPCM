@@ -1,13 +1,15 @@
 # Changelog
 
-## 1.2.9 (in testing)
+## 1.2.10 (in testing)
+- One cross on the maps: while idle the cyan cross shows where the laser is; during a
+  measurement the orange mark shows the pixel being measured (before, both showed at once)
+
+## 1.2.9 (pre-release)
 - Point sweep: **Finest: every SINE OUT step** - from a lowest to a highest power on the
   sample, a point at every 2 mV SINE OUT step (or every Nth), going up only; optionally
   measured on the way back down too. Readings per point set to 1 when ticked (back to
   before when unticked); the power list is greyed out. Point sweeps only
 - Fixed (1.2.8): switching to the Point sweep tab updates the laser position again
-- One cross on the maps: while idle the cyan cross shows where the laser is; during a
-  measurement the orange mark shows the pixel being measured (before, both showed at once)
 
 ## 1.2.8 (pre-release)
 - **Line tab** (left, after Map): line scans with their own start / end (µm from the
