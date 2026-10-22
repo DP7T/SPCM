@@ -162,16 +162,25 @@ class SweepView(QtWidgets.QWidget):
         m = sig[order]
         if not np.isfinite(m).any():
             return
+        finest = bool(getattr(d.settings, "finest", False))
+        if finest:                              # only the columns measured so far
+            used = np.isfinite(m).any(axis=0)
+            m = m[:, :int(np.nonzero(used)[0][-1]) + 1]
         lim = float(np.nanpercentile(np.abs(m), 99.5)) or 1e-30
         img = np.where(np.isfinite(m), m, 0.0)
         self.img.setImage(img, autoLevels=False)
         self.img.setRect(-0.5, -0.5, m.shape[1], m.shape[0])   # index grid
         self.bar.setLevels((-lim, lim))
         self.bar.axis.setLabel(f"{kind} {ch}", units=unit)
-        pw = list(d.powers)
+        if finest:                              # measured power of each step
+            with np.errstate(all="ignore"):
+                pw = list(np.nanmean(d.p_uW[:, :m.shape[1]], axis=0))
+        else:
+            pw = list(d.powers)
         every = max(1, len(pw) // 8)
         self.map.getAxis("bottom").setTicks(
-            [[(i, f"{p:g}") for i, p in enumerate(pw) if i % every == 0]])
+            [[(i, f"{p:.3g}") for i, p in enumerate(pw)
+              if i % every == 0 and p is not None and np.isfinite(p)]])
         bs = bx[order]
         every = max(1, len(bs) // 10)
         self.map.getAxis("left").setTicks(

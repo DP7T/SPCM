@@ -1278,6 +1278,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.pm_lab.setStyleSheet("font-size:16pt; font-weight:bold")
             self.pm_lab.setText(si(p / self.pm.sample_factor, "W"))
             self.pm_status.setText(f"  Laser on sample: {si(p / self.pm.sample_factor, 'W')}  ")
+            self._p_now_uW = p / self.pm.sample_factor * 1e6
         except Exception as e:
             self.statusBar().showMessage(f"Power meter: {e}")
 
@@ -1811,8 +1812,17 @@ class MainWindow(QtWidgets.QMainWindow):
                             f"sens = {si(li.sensitivity(), 'V/A')}")
         except Exception as e:
             self.statusBar().showMessage(f"Lock-in read failed: {e}")
+        try:                                    # SINE OUT now (finest sweep estimate)
+            lc = self.config.get("power_lock", {}) or {}
+            li = (self.hw.lockin_refl if lc.get("lockin") == "reflection"
+                  else self.hw.lockin_pc)
+            self._sine_now = float(li.sine_amplitude())
+        except Exception:
+            pass
         self.update_eta()
         self._line_tab_changed()
+        if hasattr(self, "sw_eta"):
+            self.update_sweep_eta()
 
     def update_eta(self, *_):
         try:
@@ -2520,6 +2530,45 @@ class MainWindow(QtWidgets.QMainWindow):
             "Each power is set with the SINE OUT step (2 mV) that comes closest; "
             "the power actually reached is recorded.")
         f.addRow("Powers (µW)", self.sw_powers)
+        # finest: a point at every SINE OUT step instead of a list of powers
+        self.sw_fine = QtWidgets.QCheckBox("Finest: every SINE OUT step")
+        self.sw_fine.setChecked(bool(sw.get("finest", False)))
+        f.addRow(self.sw_fine)
+        self.sw_fine_note = QtWidgets.QLabel(
+            "Reads at every 2 mV SINE OUT step (or every Nth) from the lowest to the highest "
+            "power, going up only. Many points: start with 1 reading per point.")
+        self.sw_fine_note.setWordWrap(True)
+        self.sw_fine_note.setStyleSheet("color:gray; font-size:9pt")
+        f.addRow(self.sw_fine_note)
+
+        def uw(v):
+            w = SISpinBox(1e-6, "µW")
+            w.setRange(0.001, 1e6)
+            w.setDecimals(3)
+            w.setValue(float(v))
+            w.valueChanged.connect(self.update_sweep_eta)
+            return w
+        self.sw_from, self.sw_to = uw(sw.get("p_from_uW", 1.0)), uw(sw.get("p_to_uW", 50.0))
+        self.sw_every = QtWidgets.QSpinBox()
+        self.sw_every.setRange(1, 1000)
+        self.sw_every.setValue(int(sw.get("every_steps", 1)))
+        self.sw_every.setToolTip("1 = every 2 mV step, 2 = every 4 mV, 5 = every 10 mV …")
+        self.sw_every.valueChanged.connect(self.update_sweep_eta)
+        self.sw_down = QtWidgets.QCheckBox("Measure on the way down too")
+        self.sw_down.setChecked(bool(sw.get("both_ways", False)))
+        self.sw_down.setToolTip("After reaching the highest power, step back down to the "
+                                "lowest one, measuring at every step too (shows hysteresis). "
+                                "Off: back down without measuring.")
+        self.sw_down.toggled.connect(self.update_sweep_eta)
+        self._fine_rows = []
+        for lab, w in (("From (µW)", self.sw_from), ("To (µW)", self.sw_to),
+                       ("Every … steps", self.sw_every)):
+            f.addRow(lab, w)
+            self._fine_rows.append((f.labelForField(w), w))
+        f.addRow(self.sw_down)
+        self._fine_rows.append((None, self.sw_down))
+        self._navg_before = None
+        self.sw_fine.toggled.connect(self._sweep_fine_toggled)
         self.sw_biases = QtWidgets.QLineEdit(str(sw.get("biases", "-1:1:0.25")))
         self.sw_biases.setToolTip("e.g. 0, 0.5, 1   or   -1:1:250m  (start:stop:step)")
         f.addRow("Biases (V)", self.sw_biases)
@@ -2559,9 +2608,27 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sw_navg.valueChanged.connect(self.update_sweep_eta)
         self._sweep_kind_changed()
 
+    def _sweep_fine_toggled(self, on):
+        """Finest on: readings per point to 1 (back to before when off)."""
+        if on:
+            self._navg_before = self.sw_navg.value()
+            self.sw_navg.setValue(1)
+        elif self._navg_before is not None:
+            self.sw_navg.setValue(self._navg_before)
+            self._navg_before = None
+        self._sweep_kind_changed()
+
     def _sweep_kind_changed(self, *_):
         k = self.sw_kind.currentData()
-        self.sw_powers.setEnabled(k in ("power", "bias_power"))
+        pw = k in ("power", "bias_power")
+        fine = pw and self.sw_fine.isChecked()
+        self.sw_fine.setEnabled(pw)
+        self.sw_fine_note.setVisible(pw)
+        for lab, w in self._fine_rows:          # From / To / Every / down: only when finest
+            for x in (lab, w):
+                if x is not None:
+                    x.setVisible(fine)
+        self.sw_powers.setEnabled(pw and not fine)
         self.sw_biases.setEnabled(k in ("bias", "bias_power"))
         self.sw_restore.setEnabled(k in ("power", "bias_power"))
         notes = []
@@ -2579,7 +2646,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _side_tab_changed(self, i):
         self.start_btn.setText({1: "Start line", 2: "Start sweep",
                                 3: "Start I–V"}.get(i, "Start scan"))
-        if i == 1:
+        if i == 2:                              # Point sweep tab
             self._show_spot()
             self._sweep_kind_changed()
 
@@ -2604,11 +2671,14 @@ class MainWindow(QtWidgets.QMainWindow):
             if self.pm is None:
                 raise ValueError("Power sweeps need the power meter. Turn it on in "
                                  "Hardware → Settings.")
-            powers = parse_list(self.sw_powers.text(), 1e-6)
-            if not powers:
-                raise ValueError("The power list is empty.")
-            if min(powers) <= 0:
-                raise ValueError("Powers must be above 0.")
+            if not self.sw_fine.isChecked():
+                powers = parse_list(self.sw_powers.text(), 1e-6)
+                if not powers:
+                    raise ValueError("The power list is empty.")
+                if min(powers) <= 0:
+                    raise ValueError("Powers must be above 0.")
+            elif self.sw_to.value() <= self.sw_from.value():
+                raise ValueError("Finest: 'To' must be above 'From'.")
         if k in ("bias", "bias_power"):
             if not (self.has_bias and self.amp_mode.currentData() == "sr570"):
                 raise ValueError("Bias sweeps need the SR570 current preamp (Instruments "
@@ -2636,13 +2706,38 @@ class MainWindow(QtWidgets.QMainWindow):
             amp_mode=self.amp_mode.currentData(), amp_value=self._amp_value(),
             lockin_unit=self._lockin_unit(), signal_as="peak",
             sample=self.sample.text() or "sample", notes=self.exp_notes.toPlainText(),
-            conditions=self.conditions())
+            conditions=self.conditions(),
+            finest=bool(self.sw_fine.isChecked() and k in ("power", "bias_power")),
+            p_from_uW=self.sw_from.value(), p_to_uW=self.sw_to.value(),
+            every_steps=self.sw_every.value(), both_ways=self.sw_down.isChecked())
+
+    def _fine_steps(self):
+        """Estimated number of SINE OUT steps from 'From' to 'To', assuming the power
+        on the sample grows in proportion to the SINE OUT (a rough guide only)."""
+        p_now = getattr(self, "_p_now_uW", None)
+        a_now = getattr(self, "_sine_now", None)
+        step = 0.002 * self.sw_every.value()
+        if not p_now or not a_now or p_now <= 0:
+            return None
+        a0 = a_now * self.sw_from.value() / p_now
+        a1 = a_now * self.sw_to.value() / p_now
+        return max(int((a1 - a0) / step), 1) + 1
 
     def update_sweep_eta(self, *_):
         from scanner import parse_list, pixel_wait
         try:
             k = self.sw_kind.currentData()
-            npw = len(parse_list(self.sw_powers.text(), 1e-6)) if k != "bias" else 1
+            fine = self.sw_fine.isChecked() and k != "bias"
+            if fine:
+                npw = self._fine_steps()
+                if npw is None:
+                    self.sw_eta.setText("estimate: press Refresh (Instruments tab → "
+                                        "Lock-ins) with the power meter on")
+                    return
+                if self.sw_down.isChecked():
+                    npw = 2 * npw - 1
+            else:
+                npw = len(parse_list(self.sw_powers.text(), 1e-6)) if k != "bias" else 1
             nb = len(parse_bias_list(self.sw_biases.text())) if k != "power" else 1
         except Exception:
             self.sw_eta.setText("check the lists")
@@ -2652,13 +2747,21 @@ class MainWindow(QtWidgets.QMainWindow):
         s = ScanSettings(settle_auto=self.settle_auto.isChecked(),
                          settle_tc=self.settle.value(), extra_settle_ms=self.extra.value())
         wait = pixel_wait(s, taus, (list(poles) + [4] * len(taus))[:len(taus)])
+        if fine:                                 # one step, no search
+            per = wait + 0.08 + self.sw_navg.value() * max(max(taus), 0.03)
+            self.sw_eta.setText(f"≈ {nb * npw} points ≈ {nb * npw * per / 60:.1f} min "
+                                "(estimate)")
+            return
         per = wait + self.sw_navg.value() * max(max(taus), 0.03) + (1.5 if k != "bias" else 0)
         self.sw_eta.setText(f"{nb * npw} points ≈ {nb * npw * per / 60:.1f} min")
 
     def _remember_sweep(self):
         vals = {"kind": self.sw_kind.currentData(), "powers": self.sw_powers.text(),
                 "biases": self.sw_biases.text(), "n_avg": self.sw_navg.value(),
-                "restore_power": self.sw_restore.isChecked()}
+                "restore_power": self.sw_restore.isChecked(),
+                "finest": self.sw_fine.isChecked(), "p_from_uW": self.sw_from.value(),
+                "p_to_uW": self.sw_to.value(), "every_steps": self.sw_every.value(),
+                "both_ways": self.sw_down.isChecked()}
         self.config["sweep"] = vals
         for k, v in vals.items():
             self._save_setting("sweep", k, v)

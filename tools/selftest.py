@@ -334,6 +334,32 @@ def _():
     print("      garbled reply read again; no overlapping bus access from two threads")
 
 
+@check("point sweep, finest: every SINE OUT step up (and down), trimmed, saved")
+def _():
+    import sweeps
+    HW.stage.move_to(-5, 0.5)
+    s = sweeps.SweepSettings(kind="power", finest=True, p_from_uW=25, p_to_uW=55,
+                             every_steps=10, both_ways=True, n_avg=1, x_stage=-5,
+                             y_stage=0.5, u=5, v=0.5, sample="selftest_finest")
+    w = sweeps.SweepWorker(HW, s, OUT)
+    run_worker(w)
+    d = w.data
+    up = d.direction[0] > 0
+    a = d.amp_V[0]
+    assert np.all(np.diff(a[up]) > 0), "SINE OUT must only go up on the way up"
+    assert np.allclose(np.diff(a[up]), 0.02, atol=1e-6), np.diff(a[up])     # 10 x 2 mV
+    assert d.p_uW[0][up][0] <= 27 and np.nanmax(d.p_uW[0][up]) >= 55, d.p_uW[0][up]
+    dn = d.direction[0] < 0
+    assert dn.any() and np.all(np.diff(a[dn]) < 0), "way down"
+    assert np.isfinite(d.t_s).all(), "trimmed: no empty columns"
+    r = d.fits(0)[0]
+    print(f"      finest: {int(up.sum())} steps up, {int(dn.sum())} down, alpha "
+          f"{r['alpha']:.2f}")
+    assert 0.7 < r["alpha"] < 1.0, r
+    sweeps.export_csv(d)
+    sweeps.save_all(d)
+
+
 @check("stage: a move that stops off target is retried once, then refused")
 def _():
     import instruments
@@ -715,6 +741,26 @@ if HAVE_QT:
             pump(0.2)
         assert w.thread is None and w.sweep_data is not None, "sweep did not finish"
         shot("sweep_bias_power")
+        # finest through the GUI: powers list greyed, From / To shown, 1 reading
+        w.sw_kind.setCurrentIndex(w.sw_kind.findData("power"))
+        w.sw_fine.setChecked(True)
+        assert not w.sw_powers.isEnabled() and w.sw_from.isVisible(), "finest controls"
+        assert w.sw_navg.value() == 1, w.sw_navg.value()
+        w.sw_from.setValue(30)
+        w.sw_to.setValue(50)
+        w.sw_every.setValue(10)
+        w.refresh_lockins()
+        print("      finest estimate: " + w.sw_eta.text())
+        shot("sweep_finest_tab")
+        w.start()
+        t0 = time.time()
+        while w.thread is not None and time.time() - t0 < 300:
+            pump(0.2)
+        assert w.thread is None and w.sweep_data is not None, "finest sweep did not finish"
+        assert w.sweep_data.settings.finest
+        shot("sweep_finest")
+        w.sw_fine.setChecked(False)
+        assert w.sw_navg.value() == 3, "readings per point back to before"
         # quick I-V through the GUI
         w.side_tabs.setCurrentIndex(3)
         w.iv_max.setValue(0.5)

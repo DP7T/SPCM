@@ -1,6 +1,13 @@
 # Changelog
 
-## 1.2.8 (in testing)
+## 1.2.9 (in testing)
+- Point sweep: **Finest: every SINE OUT step** - from a lowest to a highest power on the
+  sample, a point at every 2 mV SINE OUT step (or every Nth), going up only; optionally
+  measured on the way back down too. Readings per point set to 1 when ticked (back to
+  before when unticked); the power list is greyed out. Point sweeps only
+- Fixed (1.2.8): switching to the Point sweep tab updates the laser position again
+
+## 1.2.8 (pre-release)
 - **Line tab** (left, after Map): line scans with their own start / end (µm from the
   origin), step, **readings per point** (1 = like a map; more = mean + spread, error bars)
   and series (bias / power). A line drawn on a map or the camera image ("Use this line")
