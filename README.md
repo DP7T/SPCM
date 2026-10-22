@@ -106,7 +106,13 @@ The left side has two tabs:
   - To protect the objective, you can set absolute `z_min` / `z_max` limits in `config.yaml`.
 - **Camera view**: the *Flip left-right* and *Flip up-down* boxes in the Camera tab make the image match how you see the sample. They are remembered.
 - **Angle (°)** (Scan area) rotates the scan frame counter-clockwise around the start position. This works in Step mode only.
-- **Draw a frame on a map:** choose **Draw ▾ → Scan frame** above the maps. A cyan frame appears on both maps:
+- **Scan direction, before you press Start:** a pink dashed **outline of the next scan** (from the
+  Map tab: start position, size, angle, Scan towards) is shown on both maps and on the
+  calibrated camera image. A dot marks the **start pixel**, the long arrow the direction of
+  each line, the short arrow where the next lines go; with Serpentine a third arrow shows the
+  way back on the second line. It moves as you change the values. Switch it off with
+  **Draw ▾ → Outline of the next scan** (remembered).
+- **Draw a frame on a map:** choose **Draw ▾ → Scan frame** above the maps. A cyan frame, with the same dot and arrows (how it will be scanned), appears on both maps:
   - Drag it to move it.
   - Drag the square handles to resize it.
   - Drag the round handle to rotate it.
@@ -149,7 +155,7 @@ The **Line** tab (left) has its own settings, separate from the map:
 
 Once calibrated, the program knows which stage position every camera pixel shows. Then you can:
 - **double-click the camera image** to move the laser to that spot;
-- **draw a scan frame** or **a line** on the live camera image, and press *Scan this frame* or *Scan this line*. The drawings stay on the same spot of the sample when the stage moves.
+- **draw a scan frame** or **a line** on the live camera image, and press *Scan this frame* or *Scan this line*. The drawings stay on the same spot of the sample when the stage moves. The frame has the start dot and direction arrows, and the pink dashed outline shows the next scan from the Map tab.
 
 To calibrate (once, and again after changing the objective or moving the camera):
 1. Focus, and put the **cyan cross on the laser spot**.
@@ -210,16 +216,20 @@ one angle for the whole map (and for all maps of a series, so sign changes with 
 - A window shows the X–Y cloud with the line, and **Y after the correction**, on the same
   colour scale as the signal: it should look flat (noise only). If it doesn't, the message
   says so (background pickup, or a phase change during the scan).
+- The window is **for looking only**: there is nothing to save or confirm; the copy and the
+  PNGs are already saved when it opens.
 - **Subtract substrate background** (tick box): move the green box over bare substrate; its
-  mean X, Y is subtracted first. You can also type the angle, press **Auto**, then **Save
-  corrected copy**, or **No copy** to delete it.
+  mean X, Y is subtracted first, the phase is found again and the copy is saved again by
+  itself.
 - If there is no clear signal, no copy is made (just a short message).
 - **Phase lag** view (list at the bottom left of the window): the lag of every pixel in
   degrees relative to the common phase, and what 1° means in µs at the chopping frequency.
 - The window's two views are also saved as PNGs next to the copy, automatically:
   `<name>_phased_check.png` (X–Y cloud + Y after the correction) and
   `<name>_phased_lag.png` (X–Y cloud + phase lag of each pixel); one pair per map of a series.
-- *File → Phase correction of the shown map / line…* opens the window again later.
+- *File → Phase correction of the shown map / line…* opens the window again later. It shows
+  the copy as it was saved (with or without the substrate background); if there is no copy
+  yet, it is made then.
 
 ## Point and line cursors (reading values)
 Draw ▾ → **Point cursor** or **Line cursor**. The cursor appears on both maps; drag it on

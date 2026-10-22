@@ -2,7 +2,7 @@
 import os
 import sys
 
-__version__ = "1.2.10"
+__version__ = "1.2.11"
 
 
 def app_dir():

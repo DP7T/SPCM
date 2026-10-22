@@ -1,6 +1,16 @@
 # Changelog
 
-## 1.2.10 (in testing)
+## 1.2.11 (in testing)
+- **Scan direction shown before the scan:** a pink dashed outline of the next scan (Map tab
+  values) on both maps and on the calibrated camera image, with a dot on the start pixel,
+  an arrow along the lines and a shorter arrow towards the next lines (and the way back
+  for serpentine). Drawn frames (maps and camera) get the same dot and arrows.
+  Draw ▾ → Outline of the next scan switches it off
+- Phase window is for looking only: the "Save corrected copy" / "No copy" buttons, the
+  angle box and Auto are gone (the copy and PNGs are always saved automatically; "No copy"
+  gave an error). Ticking the substrate background saves the copy again by itself
+
+## 1.2.10 (pre-release)
 - The phase window's two views are saved as PNGs with every corrected copy, without
   asking: `<name>_phased_check.png` (Y after the correction) and `<name>_phased_lag.png`
   (phase lag of each pixel), one pair per map of a series

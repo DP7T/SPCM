@@ -34,6 +34,88 @@ def si(v, unit="", digits=3):
     return f"{v:.{digits}g} {unit}".strip()
 
 
+class ScanGlyph:
+    """Scan direction drawn on a frame: a dot at the start corner, an arrow along the
+    lines (fast direction), a shorter arrow towards the next lines (slow direction) and,
+    for serpentine, a return arrow on the second line. Optionally the frame outline
+    (dashed: the next scan from the Map tab). Points are given in the coordinates of
+    `parent` (an ROI: its own corner coordinates) or of the plot."""
+
+    def __init__(self, color, plot=None, parent=None, outline=False):
+        self.curve = pg.PlotCurveItem(pen=pg.mkPen(color, width=2), connect="finite")
+        self.dot = pg.ScatterPlotItem(size=10, brush=pg.mkBrush(color),
+                                      pen=pg.mkPen("k", width=1))
+        self.box = (pg.PlotCurveItem(pen=pg.mkPen(color, width=1.5,
+                                                  style=QtCore.Qt.DashLine))
+                    if outline else None)
+        self.items = [i for i in (self.box, self.curve, self.dot) if i is not None]
+        for it in self.items:
+            it.setAcceptedMouseButtons(QtCore.Qt.NoButton)
+            it.setAcceptHoverEvents(False)
+            it.setZValue(45)
+            if parent is not None:
+                it.setParentItem(parent)
+            else:
+                plot.addItem(it, ignoreBounds=True)
+
+    @staticmethod
+    def path(p0, p1, p2, serp):
+        """-> x, y of the arrows (NaN between the pieces)."""
+        p0, p1, p2 = (np.asarray(p, float) for p in (p0, p1, p2))
+        ex, ey = p1 - p0, p2 - p0
+        lx, ly = float(np.hypot(*ex)), float(np.hypot(*ey))
+        if lx <= 0:
+            return np.array([]), np.array([])
+        ux = ex / lx
+        uy = ey / ly if ly > 0 else np.array([-ux[1], ux[0]])
+        m = min(lx, ly) if ly > 0 else lx
+        a = p0 + 0.07 * m * (ux + (uy if ly > 0 else 0))
+        fast = 0.5 * lx
+        slow = min(0.3 * ly, 0.6 * fast)
+        pts = []
+
+        def arrow(t0, t1):
+            d = t1 - t0
+            L = float(np.hypot(*d))
+            if L <= 0:
+                return
+            u = d / L
+            h = min(0.35 * L, 0.12 * max(m, fast))
+            n = np.array([-u[1], u[0]])
+            pts.extend([t0, t1, np.full(2, np.nan),
+                        t1 - h * u + 0.5 * h * n, t1, t1 - h * u - 0.5 * h * n,
+                        np.full(2, np.nan)])
+        arrow(a, a + fast * ux)
+        if ly > 0:
+            arrow(a, a + slow * uy)
+            if serp:
+                g = 0.5 * slow
+                t = a + fast * ux
+                pts.extend([t, t + g * uy, np.full(2, np.nan)])
+                arrow(t + g * uy, a + 0.3 * fast * ux + g * uy)
+        P = np.array(pts)
+        return P[:, 0], P[:, 1]
+
+    def set(self, p0, p1, p2, serp=False):
+        x, y = self.path(p0, p1, p2, serp)
+        self.curve.setData(x, y)
+        self.dot.setData([float(p0[0])], [float(p0[1])])
+        if self.box is not None:
+            p0, p1, p2 = (np.asarray(p, float) for p in (p0, p1, p2))
+            c = np.array([p0, p1, p1 + p2 - p0, p2, p0])
+            self.box.setData(c[:, 0], c[:, 1])
+        self.setVisible(True)
+
+    def setVisible(self, on):
+        for it in self.items:
+            it.setVisible(on)
+
+    def remove(self):
+        for it in self.items:
+            if it.scene() is not None:
+                it.scene().removeItem(it)
+
+
 class MapPanel(QtWidgets.QWidget):
     """Image + colour bar + horizontal line cut."""
     clicked = QtCore.Signal(float, float)
@@ -878,7 +960,14 @@ class MainWindow(QtWidgets.QMainWindow):
         # the toggle buttons stay as state holders, the user sees one menu
         for b_ in (self.frame_btn, self.line_btn, self.res_btn, self.cpt_btn, self.cln_btn):
             b_.setVisible(False)
+        self.preview_btn = QtWidgets.QPushButton("Next scan outline")
+        self.preview_btn.setCheckable(True)
+        self.preview_btn.setChecked(bool((self.config.get("ui", {}) or {}).get(
+            "scan_outline", True)))
+        self.preview_btn.setVisible(False)
+        self.preview_glyphs, self.cam_preview = [], None
         self.draw_btn = self._draw_menu([
+            ("Outline of the next scan (Map tab)", self.preview_btn),
             ("Scan frame (move, resize, rotate)", self.frame_btn),
             ("Line to scan along", self.line_btn),
             ("Resolution line (reflection map)", self.res_btn),
@@ -979,6 +1068,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.folder.textChanged.connect(self._name_changed)
         QtCore.QTimer.singleShot(400, self._name_changed)
         QtCore.QTimer.singleShot(300, self._start_here_on_launch)
+        self._init_preview()
         dark = bool((self.config.get("ui", {}) or {}).get("dark", False))
         for w in self.findChildren(pg.GraphicsLayoutWidget):
             style_plots(w, dark)
@@ -1430,7 +1520,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cam_use_line = QtWidgets.QPushButton("Use this line")
         self.cam_use_line.setToolTip("Put the drawn line into the Line tab")
         self.cam_use_line.clicked.connect(self.use_cam_line)
-        self.cam_draw = self._draw_menu([("Scan frame (move, resize, rotate)",
+        self.cam_draw = self._draw_menu([("Outline of the next scan (Map tab)",
+                                          self.preview_btn),
+                                         ("Scan frame (move, resize, rotate)",
                                           self.cam_frame_btn),
                                          ("Line to scan along", self.cam_line_btn)])
         for b_ in (self.cam_draw, self.cam_frame_btn, self.cam_use_frame, self.cam_line_btn,
@@ -1600,6 +1692,7 @@ class MainWindow(QtWidgets.QMainWindow):
             roi.addScaleHandle([0.5, 1], [0.5, 0])
             roi.addRotateHandle([1, 0], [0.5, 0.5])
             self.cam_plot.addItem(roi)
+            self._add_arrows(roi)
             self.cam_rois.append(roi)
             self._track_overlays(force=True)
         for r in self.cam_rois:
@@ -1871,6 +1964,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.xc.setValue(0.0)
         self.yc.setValue(0.0)
         self.origin_lab.setText(f"origin (0, 0) = stage x {x:.2f}, y {y:.2f} µm")
+        if hasattr(self, "preview_btn"):
+            self._update_preview()
 
     def _start_here_on_launch(self):
         """When the program opens, (0, 0) is where the stage is now
@@ -1926,6 +2021,89 @@ class MainWindow(QtWidgets.QMainWindow):
         ox, oy = self.origin_xy
         return self.sx * (X - ox) + 0.0, self.sy * (Y - oy) + 0.0
 
+    # -- scan direction: arrows on drawn frames, outline of the next scan --
+    def _add_arrows(self, roi):
+        """Arrows on a drawn frame. They sit on the frame itself, so they move, turn
+        and are removed with it. The frame is scanned from its first corner along its
+        width (what 'Use this frame' puts into the Map tab)."""
+        roi._glyph = ScanGlyph("#00e5ff", parent=roi)
+
+        def upd(*_):
+            w, h = roi.size()[0], roi.size()[1]
+            roi._glyph.set((0.0, 0.0), (w, 0.0), (0.0, h), self.serp.isChecked())
+        roi._glyph.update = upd
+        roi.sigRegionChanged.connect(upd)
+        upd()
+
+    def _init_preview(self):
+        for w in (self.xc, self.yc, self.xs_, self.ys_, self.step, self.angle):
+            w.valueChanged.connect(self._update_preview)
+        for w in (self.origin, self.direction):
+            w.currentIndexChanged.connect(self._update_preview)
+        self.serp.toggled.connect(self._update_preview)
+        self.preview_btn.toggled.connect(self._preview_toggled)
+        self._update_preview()
+
+    def _preview_toggled(self, on):
+        self._save_setting("ui", "scan_outline", bool(on))
+        self._update_preview()
+
+    def _preview_stage(self):
+        """The next scan from the Map tab, as the scan will run it: stage positions of
+        the start pixel, the end of the first line and the start of the last line."""
+        s = self.settings(series=False)
+        xs, ys = s.axes()
+        x0, x1 = (xs[0], xs[-1]) if s.x_dir > 0 else (xs[-1], xs[0])
+        y0, y1 = (ys[0], ys[-1]) if s.y_dir > 0 else (ys[-1], ys[0])
+        return [s.rotate_xy(x, y) for x, y in ((x0, y0), (x1, y0), (x0, y1))], s.serpentine
+
+    def _update_preview(self, *_):
+        serp = self.serp.isChecked()
+        for r in self.rois + self.cam_rois:        # drawn frames follow 'Serpentine'
+            if hasattr(r, "_glyph"):
+                r._glyph.update()
+        pts = None
+        if self.preview_btn.isChecked() and self.origin_xy is not None:
+            try:
+                pts, serp = self._preview_stage()
+            except Exception:
+                pts = None
+        if not self.preview_glyphs:
+            self.preview_glyphs = [ScanGlyph("#ff4081", plot=p.plot, outline=True)
+                                   for p in (self.pc_panel, self.r_panel)]
+        if pts is None:
+            for g in self.preview_glyphs:
+                g.setVisible(False)
+        else:
+            if self.data is not None:
+                q = [self._stage_to_map(self.data, X, Y) for X, Y in pts]
+            else:
+                q = [self.stage_to_user(X, Y) for X, Y in pts]
+            for g in self.preview_glyphs:
+                g.set(*q, serp)
+        self._update_cam_preview(pts, serp)
+
+    def _update_cam_preview(self, pts=None, serp=False, cur=None):
+        """The next scan on the camera image (needs the calibration); not during a
+        measurement, when the image moves with the stage."""
+        if self.cam_preview is None and getattr(self, "cam_plot", None) is not None:
+            self.cam_preview = ScanGlyph("#ff4081", plot=self.cam_plot, outline=True)
+        if self.cam_preview is None:
+            return
+        if pts is None and self.preview_btn.isChecked() and self.origin_xy is not None:
+            try:
+                pts, serp = self._preview_stage()
+            except Exception:
+                pts = None
+        if cur is None:
+            cur = getattr(self, "_here_stage", None)
+        if pts is None or self.cal is None or cur is None or self._busy():
+            self.cam_preview.setVisible(False)
+            return
+        lp = self._laser_px()
+        q = [tuple(self.cal.stage_to_px(X, Y, cur, lp)) for X, Y in pts]
+        self.cam_preview.set(*q, serp)
+
     # -- scan frame drawn on a map --
     def toggle_frame(self, on):
         if on and self.data is None:
@@ -1945,6 +2123,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 roi.addScaleHandle([0.5, 1], [0.5, 0])
                 roi.addRotateHandle([1, 0], [0.5, 0.5])
                 p.plot.addItem(roi)
+                self._add_arrows(roi)
                 self.rois.append(roi)
             a, b = self.rois
 
@@ -2474,6 +2653,8 @@ class MainWindow(QtWidgets.QMainWindow):
             if self._busy():                    # during a measurement the orange mark
                 for m in self.here_marks:       # shows the current pixel instead
                     m.setVisible(False)
+                if self.cam_preview is not None:
+                    self.cam_preview.setVisible(False)
             return
         try:
             X, Y = self.hw.stage.position(quiet=True)
@@ -2482,6 +2663,10 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception:
             self.here_lab.setText("Laser now: (stage not answering)")
             return
+        moved = getattr(self, "_here_stage", None) != (X, Y)
+        self._here_stage = (X, Y)
+        if moved or self.tabs.currentWidget() is self.cam_tab:
+            self._update_cam_preview(cur=(X, Y))
         u, v = self.stage_to_user(X, Y)
         self.here_lab.setText(f"Laser now: ({u:+.2f}, {v:+.2f}) µm, "
                               f"{np.hypot(u, v):.2f} µm from the origin")
@@ -3252,6 +3437,7 @@ class MainWindow(QtWidgets.QMainWindow):
         for label, btn in items:
             act = menu.addAction(label)
             act.setCheckable(True)
+            act.setChecked(btn.isChecked())
             act.toggled.connect(btn.setChecked)
             btn.toggled.connect(lambda on, a=act: a.isChecked() != on and a.setChecked(on))
         tb.setMenu(menu)
@@ -3390,6 +3576,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.map_sel.addItem("single" if b is None else outer_text(d.settings, b))
         self.map_sel.blockSignals(False)
         self.redraw()
+        self._update_preview()
 
     def on_pixel(self, ib, iy, ix, pc, rf):
         if self.map_sel.currentIndex() != ib:
@@ -3553,9 +3740,31 @@ class MainWindow(QtWidgets.QMainWindow):
         X, Y = phase.processed_xy(d)
         res = phase.find_phase(X, Y, ref_deg=self._phase_ref())
         cp = phase.copy_path(d.path)
+        bg = False
+        if os.path.exists(cp):                   # show what was saved, don't redo it
+            try:
+                import h5py
+                import json
+                with h5py.File(cp, "r") as f:
+                    a = dict(f["info/phase_correction"].attrs)
+                off = a.get("offset", "[0, 0]")
+                off = json.loads(off) if isinstance(off, (str, bytes)) else list(off)
+                bg = bool(a.get("subtract_background", False))
+                res = dict(res, phase_deg=float(a.get("phase_deg", res.get("phase_deg", 0))),
+                           offset=[float(v) for v in off], ok=True,
+                           message=str(a.get("message", res.get("message", ""))),
+                           background_from=str(a.get("background_from", "")))
+            except Exception:
+                pass
+        elif res.get("ok"):                      # no copy yet: save it now, as after a scan
+            try:
+                phase.write_copy(d, res)
+                self._remember_angle(res["phase_deg"])
+            except Exception as e:
+                self.toast(f"Could not save the corrected copy: {e}", "warn")
         if getattr(self, "phase_dialog", None) is not None:
             self.phase_dialog.close()
-        self.phase_dialog = PhaseDialog(self, d, res, cp if os.path.exists(cp) else None)
+        self.phase_dialog = PhaseDialog(self, d, res, cp if os.path.exists(cp) else None, bg)
         self.phase_dialog.show()
 
     def on_failed(self, tb):
@@ -3833,12 +4042,14 @@ class ResolutionDialog(QtWidgets.QDialog):
 
 
 class PhaseDialog(QtWidgets.QDialog):
-    """Phase correction after a measurement: X-Y cloud with the found line, the rotated
-    Y as a check (should be only noise), optional substrate background marked with a
-    box on the map, and the angle. The corrected data go into <name>_phased.h5 (+ CSV,
-    PNG) next to the measurement; the measurement itself is never changed."""
+    """Phase correction after a measurement, for looking only: X-Y cloud with the found
+    line, the rotated Y as a check (should be only noise) or the phase lag. The corrected
+    data are saved automatically in <name>_phased.h5 (+ CSV, PNGs) next to the
+    measurement; there are no save buttons. Ticking the optional substrate background
+    (box on the map) finds the phase again and saves the copy again by itself. The
+    measurement itself is never changed."""
 
-    def __init__(self, win, d, res, saved):
+    def __init__(self, win, d, res, saved, bg=False):
         super().__init__(win)
         import phase
         self.win, self.d, self.res = win, d, dict(res)
@@ -3924,42 +4135,20 @@ class PhaseDialog(QtWidgets.QDialog):
             "Subtract the mean X, Y of the bare substrate before finding the phase. "
             + ("Without a marked area: the weakest 30 % of the pixels." if self.line else
                "Move / resize the green box on the right map over bare substrate."))
+        self.bg.setChecked(bool(bg))
+        if bg and not self.line:
+            self.roi.setVisible(True)
         self.bg.toggled.connect(self._bg_toggled)
         row.addWidget(self.bg)
-        row.addSpacing(16)
-        row.addWidget(QtWidgets.QLabel("Phase (°)"))
-        self.ang = QtWidgets.QDoubleSpinBox()
-        self.ang.setRange(-180, 180)
-        self.ang.setDecimals(1)
-        self.ang.setSingleStep(0.5)
-        self.ang.setKeyboardTracking(False)
-        self.ang.valueChanged.connect(self._angle_changed)
-        row.addWidget(self.ang)
-        auto = QtWidgets.QPushButton("Auto")
-        auto.setToolTip("Find the phase again from the data")
-        auto.clicked.connect(self.recompute)
-        row.addWidget(auto)
         row.addStretch(1)
-        self.save_btn = QtWidgets.QPushButton("Save corrected copy")
-        self.save_btn.clicked.connect(self.save)
-        row.addWidget(self.save_btn)
-        self.del_btn = QtWidgets.QPushButton("No copy")
-        self.del_btn.setToolTip("Delete the corrected copy (the measurement itself stays)")
-        self.del_btn.clicked.connect(self.no_copy)
-        row.addWidget(self.del_btn)
         lay.addLayout(row)
         style_plots(glw, bool((win.config.get("ui", {}) or {}).get("dark", False)))
         self.saved = saved
-        self._set_angle(self.res.get("phase_deg", 0.0))
+        self.phi = float(self.res.get("phase_deg", 0.0))
         self._status()
         self.redraw()
 
     # -- helpers
-    def _set_angle(self, v):
-        self.ang.blockSignals(True)
-        self.ang.setValue(float(v))
-        self.ang.blockSignals(False)
-
     def _substrate_mask(self):
         if self.line or not self.bg.isChecked():
             return None
@@ -3989,27 +4178,21 @@ class PhaseDialog(QtWidgets.QDialog):
             self.roi.setVisible(on)
         self.recompute()
 
-    def _angle_changed(self, v):
-        self.res = dict(self.res, phase_deg=float(v), ok=True,
-                        message=f"Phase set by hand: {v:+.1f}° (same as raising the "
-                                f"lock-in PHASE by {v:.1f}°).")
-        self._status(" <i>(not saved yet)</i>")
-        self.redraw()
-
     def recompute(self, *_):
         import phase
         self.res = phase.find_phase(self.X, self.Y, self.bg.isChecked(),
                                     self._substrate_mask(), ref_deg=self.ref)
         if self.res.get("ok"):
-            self._set_angle(self.res["phase_deg"])
-        self._status(" <i>(not saved yet)</i>")
+            self.phi = float(self.res["phase_deg"])
+            self._resave()
+        self._status()
         self.redraw()
 
     def redraw(self, *_):
         import phase
         ib = self.which.currentIndex() if self.which is not None else 0
         off = self.res.get("offset", (0.0, 0.0)) if self.bg.isChecked() else (0.0, 0.0)
-        phi = self.ang.value()
+        phi = self.phi
         X, Y = self.X, self.Y
         good = np.isfinite(X) & np.isfinite(Y)
         self.p1.clear()
@@ -4060,29 +4243,18 @@ class PhaseDialog(QtWidgets.QDialog):
             dy = (y1 - y0) / max(ny - 1, 1) or 1.0
             self.img.setRect(QtCore.QRectF(x0 - dx / 2, y0 - dy / 2, dx * nx, dy * ny))
 
-    def save(self):
+    def _resave(self):
+        """The substrate setting changed: the copy (h5, CSV, PNGs) is written again
+        automatically. The window only shows; there is nothing to press."""
         import phase
-        res = dict(self.res, phase_deg=self.ang.value())
+        res = dict(self.res)
         if not self.bg.isChecked():
             res["offset"], res["subtract_background"], res["background_from"] = [0.0, 0.0], False, ""
         try:
             self.saved = phase.write_copy(self.d, res)
-            self.res = res
             self.win._remember_angle(res["phase_deg"])
-            self._status()
-            self.win.toast(f"Phase-corrected copy saved ({res['phase_deg']:+.1f}°)", "info")
         except Exception as e:
-            self.win.error(f"Could not save the corrected copy:\n{e}")
-
-    def no_copy(self):
-        import phase
-        try:
-            phase.remove_copy(self.d.path)
-        except OSError as e:
-            self.win.error(f"Could not delete the copy:\n{e}")
-            return
-        self.saved = None
-        self._status()
+            self.win.toast(f"Could not save the corrected copy: {e}", "warn")
 
 
 class CursorDialog(QtWidgets.QDialog):

@@ -604,19 +604,26 @@ if HAVE_QT:
         # the phase correction ran by itself after the scan
         pd = getattr(w, "phase_dialog", None)
         assert pd is not None and pd.saved and os.path.exists(pd.saved), "no phased copy"
-        print(f"      phase found after the map: {pd.ang.value():+.1f}° (simulation: +12°)")
+        print(f"      phase found after the map: {pd.phi:+.1f}° (simulation: +12°)")
         pump(0.5)
         pd.grab().save(os.path.join(OUT, "screen_phase_dialog.png"))
-        pd.bg.setChecked(True)                    # substrate box on the map
+        t_copy = os.path.getmtime(pd.saved)
+        pump(1.1)
+        pd.bg.setChecked(True)                    # substrate box: saved again by itself
         pump(0.5)
+        assert os.path.getmtime(pd.saved) > t_copy, "copy not re-saved after the substrate tick"
+        assert not hasattr(pd, "save_btn") and not hasattr(pd, "del_btn"), "save buttons back"
         pd.grab().save(os.path.join(OUT, "screen_phase_dialog_substrate.png"))
         pd.view.setCurrentIndex(1)                # phase-lag view
         pump(0.5)
         pd.grab().save(os.path.join(OUT, "screen_phase_lag.png"))
-        pd.save()
         pd.close()
+        w.phase_shown()                           # File -> Phase correction: shows what was saved
+        pump(0.3)
+        assert w.phase_dialog.bg.isChecked() and abs(w.phase_dialog.phi - pd.phi) < 0.01
+        w.phase_dialog.close()
         # the next map follows the angle just used (in the same session, no restart)
-        assert abs(w._phase_ref() - pd.ang.value()) < 0.01, (w._phase_ref(), pd.ang.value())
+        assert abs(w._phase_ref() - pd.phi) < 0.01, (w._phase_ref(), pd.phi)
         w.start()
         t0 = time.time()
         while w.thread is not None and time.time() - t0 < 120:
@@ -702,6 +709,38 @@ if HAVE_QT:
         w.tabs.setCurrentIndex(0)
         w.side_tabs.widget(0).ensureWidgetVisible(w.here_lab)
         shot("map_position")
+        # scan direction: outline of the next scan (Map tab values) + arrows on a frame
+        w.origin.setCurrentIndex(w.origin.findData("corner"))
+        w.direction.setCurrentIndex(0)
+        w.angle.setValue(0.0)
+        w.xc.setValue(3.0)
+        w.yc.setValue(2.0)
+        w.xs_.setValue(6.0)
+        w.ys_.setValue(4.0)
+        g = w.preview_glyphs[0]
+        assert g.dot.isVisible(), "no outline of the next scan"
+        px, py = g.dot.getData()
+        assert abs(px[0] - 3.0) < 0.01 and abs(py[0] - 2.0) < 0.01, (px, py)
+        bx, by = g.box.getData()
+        assert abs(max(bx) - 9.0) < 0.01 and abs(max(by) - 6.0) < 0.01, (bx, by)
+        w.direction.setCurrentIndex(1)                # −x and +y
+        px, _ = g.dot.getData()
+        assert abs(px[0] - 3.0) < 0.01, "start corner should stay at the typed position"
+        fx, _ = g.curve.getData()
+        assert np.nanmin(fx) < 1.0, "arrow should point towards -x"
+        print("      outline of the next scan: start (3, 2), arrows follow 'Scan towards'")
+        w.direction.setCurrentIndex(0)
+        w.serp.setChecked(True)
+        w.angle.setValue(20.0)
+        w.frame_btn.setChecked(True)
+        assert w.rois and np.isfinite(w.rois[0]._glyph.curve.getData()[0]).any()
+        shot("map_scan_arrows")
+        w.frame_btn.setChecked(False)
+        w.serp.setChecked(False)
+        w.angle.setValue(0.0)
+        w.preview_btn.setChecked(False)
+        assert not g.dot.isVisible(), "outline should hide"
+        w.preview_btn.setChecked(True)
         # camera: calibrate, then draw a frame and a line on it
         if getattr(w, "cam_tab", None) is not None:
             w.tabs.setCurrentWidget(w.cam_tab)
@@ -727,6 +766,15 @@ if HAVE_QT:
             shot("camera_calibrated")
             w.use_cam_frame()
             assert w.side_tabs.currentIndex() == 0
+            w._poll_position()
+            assert w.cam_preview is not None and w.cam_preview.dot.isVisible(), \
+                "no outline of the next scan on the camera"
+            cx, cy = w.cam_preview.dot.getData()
+            r0 = w.cam_rois[0].mapToParent(QtCore.QPointF(0, 0))
+            assert np.hypot(cx[0] - r0.x(), cy[0] - r0.y()) < 3, \
+                ((cx[0], cy[0]), (r0.x(), r0.y()))
+            print("      camera: outline of the next scan starts at the drawn frame's corner")
+            shot("camera_next_scan")
             w.cam_frame_btn.setChecked(False)
             w.cam_line_btn.setChecked(False)
         # point sweep (bias x power) through the GUI
