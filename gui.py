@@ -2471,6 +2471,9 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.origin_xy is None or self._busy() or not self.isVisible():
             if self.origin_xy is None:
                 self.here_lab.setText("")
+            if self._busy():                    # during a measurement the orange mark
+                for m in self.here_marks:       # shows the current pixel instead
+                    m.setVisible(False)
             return
         try:
             X, Y = self.hw.stage.position(quiet=True)
@@ -2494,6 +2497,9 @@ class MainWindow(QtWidgets.QMainWindow):
         mu, mv = self._stage_to_map(self.data, X, Y)
         for m in self.here_marks:
             m.setPos(mu, mv)
+            m.setVisible(True)
+        for p in (self.pc_panel, self.r_panel):   # one cross only: hide the orange mark
+            p.marker.setData([], [])
 
     def build_sweep_tab(self, lay):
         sw = self.config.get("sweep", {}) or {}
