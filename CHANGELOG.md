@@ -1,6 +1,9 @@
 # Changelog
 
 ## 1.2.10 (in testing)
+- The phase window's two views are saved as PNGs with every corrected copy, without
+  asking: `<name>_phased_check.png` (Y after the correction) and `<name>_phased_lag.png`
+  (phase lag of each pixel), one pair per map of a series
 - One cross on the maps: while idle the cyan cross shows where the laser is; during a
   measurement the orange mark shows the pixel being measured (before, both showed at once)
 

@@ -251,7 +251,101 @@ def write_copy(d, res, export=True):
             from figures import save_all
             export_csv(c)
             save_all(c)
+        try:
+            save_check_figures(d, res, c.path)
+        except Exception:
+            pass                                   # the figures are extra, never fatal
     return c.path
+
+
+def save_check_figures(d, res, copy_path_):
+    """The two views of the phase window as PNGs next to the copy, for every map:
+    <copy>_check[_mapK_tag].png  X-Y cloud with the line + Y after the correction
+    <copy>_lag[_mapK_tag].png    X-Y cloud with the line + phase lag of each pixel."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from scanner import pc_scale, outer_tag
+    from figures import _prefix
+    st = d.settings
+    unit = pc_scale(st)[1] or getattr(st, "lockin_unit", "V")
+    X, Y = processed_xy(d)
+    phi = float(res["phase_deg"])
+    off = res.get("offset", (0.0, 0.0)) if res.get("subtract_background") else (0.0, 0.0)
+    noise = res.get("noise")
+    ox = st.origin_x if st.origin_x is not None else st.x_center
+    oy = st.origin_y if st.origin_y is not None else st.y_center
+    u = (-1 if st.flip_x else 1) * (np.asarray(d.xs) - ox)
+    v = (-1 if st.flip_y else 1) * (np.asarray(d.ys) - oy)
+    line = getattr(st, "scan_type", "map") == "line"
+    ix = np.arange(len(u)) if line else np.argsort(u)
+    iy = np.arange(len(v)) if line else np.argsort(v)
+    f = next((mi.get("chop_freq_Hz") for mi in (d.map_info or []) if mi and
+              mi.get("chop_freq_Hz")), None)
+    base = os.path.splitext(copy_path_)[0]
+    vals = st.outer_list()
+    good = np.isfinite(X) & np.isfinite(Y)
+    sc, pre = _prefix(float(np.nanmax(np.hypot(X, Y))) if good.any() else 1.0)
+    out = []
+    plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 10})
+    for ib, b in enumerate(vals):
+        tag = "" if len(vals) == 1 else f"_map{ib}" + outer_tag(st, b)
+        Xr, Yr = rotate(X[ib], Y[ib], phi, off)
+        lag = lag_map(X[ib], Y[ib], phi, off, noise)
+        for kind in ("check", "lag"):
+            fig, (a1, a2) = plt.subplots(1, 2, figsize=(10, 4.2),
+                                         gridspec_kw={"width_ratios": [1, 1.3]})
+            a1.plot(X[good] / sc, Y[good] / sc, ".", ms=3, color="#5a78c8", alpha=0.5)
+            L = float(np.nanmax(np.hypot(X - off[0], Y - off[1]))) / sc if good.any() else 1
+            c_, s_ = np.cos(np.radians(phi)), np.sin(np.radians(phi))
+            a1.plot([off[0] / sc - L * c_, off[0] / sc + L * c_],
+                    [off[1] / sc - L * s_, off[1] / sc + L * s_], "-", color="#e65100")
+            a1.set_aspect("equal", adjustable="datalim")
+            a1.set_xlabel(f"X ({pre}{unit})")
+            a1.set_ylabel(f"Y ({pre}{unit})")
+            a1.set_title(f"X–Y, every pixel; phase {phi:+.1f}°", fontsize=10)
+            a1.grid(alpha=0.3)
+            if kind == "check":
+                z, lab, cm = Yr / sc, f"Y after correction ({pre}{unit})", "bwr"
+                m = float(np.nanmax(np.abs(z))) if np.isfinite(z).any() else 1.0
+                ttl = "Y after the correction (own scale)"
+            else:
+                z, lab, cm = lag, "phase lag (°)", "bwr"
+                m = float(np.nanmax(np.abs(z))) if np.isfinite(z).any() else 1.0
+                ttl = "Phase lag of each pixel (−: later / slower)"
+                if f:
+                    ttl += f"\n1° = {1e6 / 360 / f:.2g} µs at {f:.0f} Hz"
+            if line:
+                dist = np.asarray(d.xs) - d.xs[0]
+                a2.plot(dist, z[0], "-o", ms=3, color="#1565c0")
+                a2.axhline(0, color="0.6", lw=0.8)
+                a2.set_xlabel("Distance along the line (µm)")
+                a2.set_ylabel(lab)
+            else:
+                img = z[np.ix_(iy, ix)]
+                du = (u[ix][-1] - u[ix][0]) / max(len(u) - 1, 1) or 1.0
+                dv = (v[iy][-1] - v[iy][0]) / max(len(v) - 1, 1) or 1.0
+                ext = (u[ix][0] - du / 2, u[ix][-1] + du / 2, v[iy][0] - dv / 2,
+                       v[iy][-1] + dv / 2)
+                im = a2.imshow(img, origin="lower", extent=ext, cmap=cm, vmin=-m, vmax=m,
+                               interpolation="nearest", aspect="equal")
+                cb = fig.colorbar(im, ax=a2)
+                cb.set_label(lab)
+                a2.set_xlabel("x (µm)")
+                a2.set_ylabel("y (µm)")
+            a2.set_title(ttl + ("" if b is None else f"  ({b:g} {outer_name_unit(st)})"),
+                         fontsize=10)
+            fig.tight_layout()
+            path = f"{base}_{kind}{tag}.png"
+            fig.savefig(path, dpi=150, facecolor="white")
+            plt.close(fig)
+            out.append(path)
+    return out
+
+
+def outer_name_unit(st):
+    from scanner import outer_name
+    return outer_name(st)[1]
 
 
 def remove_copy(path):

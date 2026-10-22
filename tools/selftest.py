@@ -235,6 +235,8 @@ def _():
     i = np.nanargmax(np.hypot(X, Y))
     assert Xc.ravel()[i] > 0, "X must be positive at the strongest pixel"
     assert os.path.isdir(os.path.splitext(p)[0] + "_csv")
+    for k in ("check", "lag"):                  # the two views of the window, as PNGs
+        assert os.path.exists(f"{os.path.splitext(p)[0]}_{k}_map0_-0.5V.png"), k
     rng = np.random.default_rng(1)
     assert not phase.find_phase(rng.normal(size=400), rng.normal(size=400))["ok"]
     # a constant pickup on top: found from a marked substrate area

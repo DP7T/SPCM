@@ -216,6 +216,9 @@ one angle for the whole map (and for all maps of a series, so sign changes with 
 - If there is no clear signal, no copy is made (just a short message).
 - **Phase lag** view (list at the bottom left of the window): the lag of every pixel in
   degrees relative to the common phase, and what 1° means in µs at the chopping frequency.
+- The window's two views are also saved as PNGs next to the copy, automatically:
+  `<name>_phased_check.png` (X–Y cloud + Y after the correction) and
+  `<name>_phased_lag.png` (X–Y cloud + phase lag of each pixel); one pair per map of a series.
 - *File → Phase correction of the shown map / line…* opens the window again later.
 
 ## Point and line cursors (reading values)
