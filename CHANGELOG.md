@@ -8,8 +8,9 @@
   spot is not on the map shown. Map only, not the camera
 - **Quick I–V: optional straight-line fit** (tick box "Fit a straight line (resistance R)",
   off by default): I = V/R + I0 through all points, all cycles. Fit line and R ± error on
-  the plot and in the PNG; R, I0, r² in the h5 and info.txt. With `{R}` in the file-name
-  pattern, the folder and files are renamed after the fit, e.g. `..._R12.3kOhm_001`
+  the plot and in the PNG; R, I0, r² in the h5 and info.txt. R also goes into the file
+  name (folder and files renamed after the fit), e.g. `..._IV_R12.3kOhm_001`; `{R}` in
+  the file-name pattern chooses where
 
 ## 1.2.12 (pre-release)
 - **No more freezing at the end of a long measurement:** CSV, figures and the phase copy

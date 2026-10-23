@@ -884,8 +884,14 @@ if HAVE_QT:
         assert os.path.exists(os.path.splitext(w.iv_data.path)[0] + ".png"), "figure not renamed"
         print("      I-V with fit, name: " + ivn)
         shot("iv")
+        # fit ticked, pattern WITHOUT {R}: R still goes into the name
+        w.name_pat.setEditText("{sample}_{n}")
+        nm = w.measurement_name("iv", w._iv_settings())
+        assert "RFIT" in nm, nm
+        print("      fit ticked, pattern without {R}: " + nm + " (RFIT = R after the fit)")
         w.name_pat.setEditText(pat0)
         w.iv_fit.setChecked(False)
+        assert "RFIT" not in w.measurement_name("iv", w._iv_settings()), "R without fit"
         w._toggle_dark(True)                      # the I-V plot follows the theme
         shot("iv_dark")
         w._toggle_dark(False)

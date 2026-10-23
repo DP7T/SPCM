@@ -3147,9 +3147,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.iv_fit.setChecked(bool(ivc.get("fit", False)))
         self.iv_fit.setToolTip(
             "I = V/R + I0 through every point of the sweep (all cycles). R is shown on "
-            "the plot and saved in the figure, h5 and info.txt. Put {R} in the file-name "
-            "pattern (field menu) to get it in the name, e.g. ..._R12.3kOhm_001: the "
-            "folder and files are renamed when the fit is done.")
+            "the plot and saved in the figure, h5 and info.txt, and R goes into the file "
+            "name, e.g. ..._IV_R12.3kOhm_001: the folder and files are renamed when the "
+            "fit is done. Put {R} in the file-name pattern to choose where it goes.")
         self.iv_fit.toggled.connect(lambda on: (self._save_setting("iv", "fit", bool(on)),
                                                 self._redraw_iv()))
         f.addRow(self.iv_fit)
@@ -3631,7 +3631,11 @@ class MainWindow(QtWidgets.QMainWindow):
         import naming
         pat = self.name_pat.currentText().strip() or naming.DEFAULT_PATTERN
         self._save_setting("scan_defaults", "file_pattern", pat)
-        return naming.make_name(naming.pattern_for(pat, kind), self._name_values(kind, s),
+        pat = naming.pattern_for(pat, kind)
+        if kind == "iv" and getattr(s, "fit", False) and "{r}" not in pat.lower():
+            # fit ticked: the resistance always goes into the name (before the number)
+            pat = pat.replace("{n}", "{R}_{n}", 1) if "{n}" in pat else pat + "_{R}"
+        return naming.make_name(pat, self._name_values(kind, s),
                                 self.folder.text() or "data")
 
     def _name_changed(self, *_):

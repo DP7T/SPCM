@@ -32,3 +32,16 @@ same amount, and save a drift-corrected copy (like `_phased`) together with the 
 shift per line (= a drift curve). For map series the same with a 2-D shift. No
 correction during the measurement (option 2 was not chosen). Ask before building.
 
+
+## Known small issues (from an outside code review of 1.2.13; user: skip for now, keep in mind)
+- Point sweep: when the higher powers can't be reached, the rest of the row is skipped
+  (NaN, with a warning) but the file still says "Completed: True" (`sweeps.py`,
+  `d.completed = not self._stop`). Fix: completed only if every point was measured; list
+  the skipped powers in info.txt.
+- Quick I–V: an AUX IN overrange on the very last point still gives completed = True
+  (`iv.py`, `len(d.rows) == len(pts)`). Fix: also require no stop reason.
+- Autofocus: `autofocus.fresh_frame` returns the last (old) image after its 5 s timeout
+  without saying so, so a stalled camera can give a wrong focus. Fix: warn and stop.
+- Checked and not a problem: the InterruptedError path in `ScanWorker.run` (only before
+  any data; bias not yet changed, stage speed restored in `finally`, SINE OUT left where
+  the aborted power setting stopped on purpose). Fly-scan items: fly mode is not used.
