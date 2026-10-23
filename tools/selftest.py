@@ -496,6 +496,33 @@ def _():
         linescan.export_csv(d)
         linescan.save_all(d)
     HW.lockin_pc.set_sine_amplitude(1.0)
+    # a long series (12 lines): colour bar instead of a legend, no phase PNG per line
+    import phase
+    vals = [round(-0.6 + 0.1 * k, 2) for k in range(12)]
+    s = linescan.line_settings((-8, -3), (8, 4), 1.0, biases=vals, origin=(0, 0),
+                               flips=(False, False), amp_mode="sr570", amp_value=1e-6,
+                               sample="selftest_line_long")
+    d = load(run_worker(ScanWorker(HW, s, OUT)))
+    linescan.save_all(d)
+    res = phase.find_phase(*phase.processed_xy(d))
+    if res.get("ok"):
+        cp = phase.write_copy(d, res)
+        import glob
+        base = os.path.splitext(cp)[0]
+        assert not glob.glob(base + "_check*.png") and not glob.glob(base + "_lag*.png"), \
+            "phase PNGs written for every line"
+        assert os.path.exists(base + ".png"), "corrected line figure missing"
+    # a crash while saving does not destroy the file saved before
+    from scanner import atomic_h5
+    try:
+        with atomic_h5(d.path) as f:
+            f.create_dataset("half", data=[1, 2, 3])
+            raise RuntimeError("simulated crash while writing")
+    except RuntimeError:
+        pass
+    assert load(d.path).pc.shape == d.pc.shape, "file damaged by an interrupted save"
+    print("      12-line series: colour bar instead of legend; interrupted save: "
+          "old file intact")
 
 
 @check("camera calibration (simulated)")

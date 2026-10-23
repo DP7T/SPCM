@@ -226,7 +226,8 @@ one angle for the whole map (and for all maps of a series, so sign changes with 
   degrees relative to the common phase, and what 1° means in µs at the chopping frequency.
 - The window's two views are also saved as PNGs next to the copy, automatically:
   `<name>_phased_check.png` (X–Y cloud + Y after the correction) and
-  `<name>_phased_lag.png` (X–Y cloud + phase lag of each pixel); one pair per map of a series.
+  `<name>_phased_lag.png` (X–Y cloud + phase lag of each pixel); one pair per map of a series
+  (not for line-scan series: there the corrected figure of the whole series is enough).
 - *File → Phase correction of the shown map / line…* opens the window again later. It shows
   the copy as it was saved (with or without the substrate background); if there is no copy
   yet, it is made then.

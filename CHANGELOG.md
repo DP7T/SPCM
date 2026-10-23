@@ -1,6 +1,17 @@
 # Changelog
 
-## 1.2.11 (in testing)
+## 1.2.12 (in testing)
+- **Safer saving:** files are written to `<name>.h5.part` first and then swapped in, so a
+  crash or power cut while saving no longer destroys the measurement saved so far. If an
+  autosave fails during a measurement (e.g. the file is open in another program), you get
+  a warning and the measurement goes on
+- Line-scan series: no more phase PNGs for every single line (the corrected figure of the
+  whole series is still saved)
+- Plots with many curves (more than 8 lines / biases): a colour bar instead of a legend,
+  so nothing covers the data (saved figures); in the live plots the legend is hidden and
+  the title says which colour is which
+
+## 1.2.11 (pre-release)
 - **Scan direction shown before the scan:** a pink dashed outline of the next scan (Map tab
   values) on both maps and on the calibrated camera image, with a dot on the start pixel,
   an arrow along the lines and a shorter arrow towards the next lines (and the way back

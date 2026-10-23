@@ -252,7 +252,8 @@ def write_copy(d, res, export=True):
             export_csv(c)
             save_all(c)
         try:
-            save_check_figures(d, res, c.path)
+            if not (linescan.is_line(c) and len(c.settings.outer_list()) > 1):
+                save_check_figures(d, res, c.path)    # not one pair per line of a series
         except Exception:
             pass                                   # the figures are extra, never fatal
     return c.path

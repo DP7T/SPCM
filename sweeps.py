@@ -18,7 +18,7 @@ from dataclasses import dataclass, field, asdict
 import numpy as np
 
 from scanner import (QtCore, CHANNELS, pc_scale, signal_kind, pixel_wait,
-                     set_laser_power, ramp_sine, SINE_STEP_V as SINE_STEP)
+                     set_laser_power, ramp_sine, autosave, SINE_STEP_V as SINE_STEP)
 
 KINDS = {"power": "Power sweep", "bias": "Bias sweep", "bias_power": "Bias × power sweep"}
 
@@ -139,7 +139,8 @@ class SweepData:
         fac, unit, formula = pc_scale(s)
         unit = unit or s.lockin_unit
         kind = signal_kind(s)
-        with h5py.File(path, "w") as f:
+        from scanner import atomic_h5
+        with atomic_h5(path) as f:
             f.attrs["format"] = "SPCM point sweep v1"
             f.attrs["type"] = "point_sweep"
             f.attrs["sweep"] = s.kind
@@ -374,7 +375,8 @@ def save_figure(d, path, channel=0, dpi=200):
     ylab = f"{kind} {ch} ({pre}{unit})"
     plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 11})
     nb = len(d.biases)
-    colors = plt.cm.viridis(np.linspace(0, 0.9, max(nb, 1)))
+    from figures import series_key, add_series_bar
+    colors, sm = series_key(list(d.biases))
     fits = d.fits(channel)
     where = f"({s.u:.2f}, {s.v:.2f}) µm"
 
@@ -422,11 +424,14 @@ def save_figure(d, path, channel=0, dpi=200):
         a_log.set_ylabel(f"|{kind} {ch}| ({pre}{unit})")
         a_lin.set_title(f"{kind} vs power at {where}", fontsize=11)
         a_log.set_title("log-log, fit |S| = A·P$^α$", fontsize=11)
-        if nb > 1 or any(fits):
-            a_log.legend(fontsize=8, title="Bias" if s.kind == "bias_power" else None,
-                         title_fontsize=8)
-        if nb > 1:
-            a_lin.legend(fontsize=8, title="Bias", title_fontsize=8)
+        if sm is not None:                     # many biases: colour bar, no legend
+            add_series_bar(fig, [a_lin, a_log], sm, "Bias (V)")
+        else:
+            if nb > 1 or any(fits):
+                a_log.legend(fontsize=8, title="Bias" if s.kind == "bias_power" else None,
+                             title_fontsize=8)
+            if nb > 1:
+                a_lin.legend(fontsize=8, title="Bias", title_fontsize=8)
         if s.kind == "bias_power":
             ax = axes[2]
             pw = np.array(d.powers, float)
@@ -584,7 +589,7 @@ class SweepWorker(QtCore.QObject):
                     self._sleep(wait)
                 if s.finest and s.kind in ("power", "bias_power"):
                     self._finest_row(ib, b, li, wait, spacing, t0)
-                    d.save(self.path)
+                    autosave(d, self.path, self.notify)
                     continue
                 for ip, p in enumerate(powers):
                     if self._stop:
@@ -615,7 +620,7 @@ class SweepWorker(QtCore.QObject):
                     done += 1
                     el = time.time() - t0
                     self.progress.emit(done, total, el / done * (total - done))
-                d.save(self.path)                # autosave after every bias row
+                autosave(d, self.path, self.notify)   # after every bias row
             d.completed = not self._stop
             self._finish(li, amp0, use_bias)
             if s.finest:

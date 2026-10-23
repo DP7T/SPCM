@@ -183,7 +183,10 @@ def save_figure(d, path, channel=0, dpi=200):
     else:
         fig, (a1, a2) = plt.subplots(2, 1, figsize=(6.4, 5.6), sharex=True,
                                      gridspec_kw={"height_ratios": [2, 1]})
-    colors = plt.cm.viridis(np.linspace(0, 0.9, max(len(biases), 1)))
+    from figures import series_key
+    bv = np.array([np.nan if b is None else b for b in biases], float)
+    colors, sm = series_key(biases, log=bool(punit == "µW" and np.isfinite(bv).all()
+                                              and bv.min() > 0 and bv.max() / bv.min() > 10))
     sd = signal_std(d, channel)
     for ib, b in enumerate(biases):
         a1.plot(dist, sig[ib] / scale, "o-", ms=3, lw=1.2, color=colors[ib],
@@ -200,8 +203,15 @@ def save_figure(d, path, channel=0, dpi=200):
     a2.set_xlabel("Distance along the line (µm)")
     plt.setp(a1.get_xticklabels(), visible=False)
     if multi:
-        a1.legend(fontsize=8, title=pname, title_fontsize=8, ncol=2 if len(biases) > 6
-                  else 1)
+        if sm is None:
+            a1.legend(fontsize=8, title=pname, title_fontsize=8)
+        else:                                   # many curves: colour bar, no legend
+            for a in (a1, a2):
+                p = a.get_position()
+                a.set_position([p.x0, p.y0, 0.355, p.height])
+            cb = fig.colorbar(sm, cax=fig.add_axes([0.432, 0.10, 0.011, 0.82]))
+            cb.set_label(f"{pname} ({punit})", fontsize=9)
+            cb.ax.tick_params(labelsize=8)
         bx = np.array(biases, float)
         order = np.argsort(bx)
         m = sig[order] / scale

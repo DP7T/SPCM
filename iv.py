@@ -81,7 +81,8 @@ class IVData:
         import h5py
         self.path = path
         s = self.settings
-        with h5py.File(path, "w") as f:
+        from scanner import atomic_h5
+        with atomic_h5(path) as f:
             f.attrs["format"] = "SPCM quick I-V v1"
             f.attrs["type"] = "iv"
             f.attrs["sample"] = s.sample

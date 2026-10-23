@@ -8,12 +8,45 @@ import os
 import time
 import json
 import traceback
+import contextlib
 from dataclasses import dataclass, field, asdict
 
 import numpy as np
 
 from numparse import parse_number
 from instruments import SR830_SENS
+
+
+def autosave(d, path, notify=None):
+    """Save during a measurement. A failure (e.g. the file is open in another program)
+    does not stop the measurement: a warning, and the next autosave tries again."""
+    try:
+        d.save(path)
+    except Exception as e:
+        if notify is not None:
+            notify.emit(f"Autosave failed ({e}). The measurement goes on; it is saved "
+                        "again after the next map / line and at the end.", "warn")
+
+
+@contextlib.contextmanager
+def atomic_h5(path):
+    """Write an HDF5 file safely: first into <path>.part, then swap it in. If the
+    program or the PC stops while writing, the last saved file is still complete
+    (before, the file was emptied first and then written, so a crash at that moment
+    lost everything). If the swap fails (file open in another program), the new data
+    stays in <path>.part and an error says so."""
+    import h5py
+    tmp = path + ".part"
+    with h5py.File(tmp, "w") as f:
+        yield f
+    for _ in range(10):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            time.sleep(0.3)
+    raise OSError(f"Could not write {os.path.basename(path)} - is it open in another "
+                  f"program? The newest data is in {os.path.basename(tmp)} next to it.")
 try:
     from pyqtgraph.Qt import QtCore
 except ImportError:  # headless use / testing without Qt
@@ -319,7 +352,7 @@ class ScanData:
         if line:                         # a line keeps its order: start -> end
             ix, iy = np.arange(len(self.xs)), np.arange(len(self.ys))
         view = np.ix_(iy, ix)
-        with h5py.File(path, "w") as f:
+        with atomic_h5(path) as f:
             f.attrs["format"] = "SPCM v2 (one group per map)"
             f.attrs["scan_type"] = "line" if line else "map"
             f.attrs["sample"] = s.sample
@@ -1299,7 +1332,7 @@ class ScanWorker(QtCore.QObject):
                     self.status.emit(f"Map {ib + 1}/{nb}{label}, line {line + 1}/{ny}  ·  "
                                      + self._timing_text(line_s, nx))
                 self._snapshot(ib, "end")
-                d.save(self.path)  # autosave after each map
+                autosave(d, self.path, self.notify)  # after each map / line
             d.completed = not self._stop
             if any(b is not None for b in s.biases):
                 hw.bias.ramp_to(0.0)

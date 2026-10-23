@@ -42,6 +42,17 @@ def _colors(n):
     return cm.map(np.linspace(0.0, 0.9, max(n, 1)), mode="qcolor")
 
 
+LEGEND_MAX = 8   # more curves: no legend (it would cover them), a colour note instead
+
+
+def _colour_note(vals, unit):
+    """'colours: dark = first … light = last' for many curves."""
+    v = [b for b in vals if b is not None]
+    if len(v) <= LEGEND_MAX:
+        return ""
+    return f"  ·  colours: dark = {v[0]:g} {unit} … light = {v[-1]:g} {unit}"
+
+
 class SweepView(QtWidgets.QWidget):
     """Linear plot (with error bars), log-log plot (with the fitted slope) and,
     for bias × power sweeps, a bias–power map."""
@@ -150,6 +161,11 @@ class SweepView(QtWidgets.QWidget):
             self.log.setLabel("bottom", "Power on sample", units="µW")
             self.log.setLabel("left", f"|{kind} {ch}| ({lpre}{unit})")
             self.log.setTitle("log-log, fit |S| = A·P^α")
+        many = nb > LEGEND_MAX and s.kind != "bias"
+        for leg in (self.lin_leg, self.log_leg):
+            leg.setVisible(not many)
+        if many:
+            self.lin.setTitle(self.lin.titleLabel.text + _colour_note(list(d.biases), "V"))
         if s.kind == "bias_power":
             self._draw_map(d, sig, unit, kind, ch)
         n_done = int(np.isfinite(sig).sum())
@@ -261,6 +277,9 @@ class LineView(QtWidgets.QWidget):
             r = d.refl[ib, 0, :, 2]
             okr = np.isfinite(r)
             self.refl.plot(dist[okr], r[okr], pen=pg.mkPen(c, width=1.2))
+        self.leg.setVisible(nb <= LEGEND_MAX)
+        if nb > LEGEND_MAX:
+            self.sig.setTitle(self.sig.titleLabel.text + _colour_note(vals, punit))
         multi = nb > 1
         self.map.setVisible(multi)
         if multi:
