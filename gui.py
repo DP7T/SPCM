@@ -34,6 +34,36 @@ def si(v, unit="", digits=3):
     return f"{v:.{digits}g} {unit}".strip()
 
 
+class _PostJob(QtCore.QObject):
+    """Saving work after a measurement (CSV, figures, phase copy), done in a background
+    thread so the window never freezes - a long series can take minutes. One job at a
+    time (matplotlib is not made for several threads at once)."""
+    done = QtCore.Signal(object, object)          # result, error text
+    LOCK = __import__("threading").Lock()
+
+    def __init__(self, work):
+        super().__init__()                         # lives in the window's thread
+        self.work = work
+        self.callback = None
+        import threading
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.done.connect(self._deliver, QtCore.Qt.ConnectionType.QueuedConnection)
+
+    def _deliver(self, result, err):               # runs in the window's thread
+        if self.callback is not None:
+            self.callback(result, err)
+
+    def _run(self):
+        import traceback
+        with self.LOCK:
+            try:
+                r = self.work()
+            except Exception:
+                self.done.emit(None, traceback.format_exc())
+                return
+        self.done.emit(r, None)
+
+
 class ScanGlyph:
     """Scan direction drawn on a frame: a dot at the start corner, an arrow along the
     lines (fast direction), a shorter arrow towards the next lines (slow direction) and,
@@ -2463,18 +2493,25 @@ class MainWindow(QtWidgets.QMainWindow):
             update_experiment(path, self.conditions(), self.exp_notes.toPlainText())
         except Exception as e:
             self.statusBar().showMessage(f"Could not update notes: {e}")
-        try:
+        ref = self._phase_ref()
+
+        def work():                                 # background thread
             import linescan
-            self.line_data = load(path)
-            linescan.export_csv(self.line_data)
-            linescan.save_all(self.line_data)
-            self._redraw_line()
-        except Exception as e:
-            self.statusBar().showMessage(f"CSV/figure export failed: {e}")
-            return
-        self._auto_phase(self.line_data)
-        self.statusBar().showMessage(("Line scan finished" if done else "Line scan stopped")
-                                     + f" - saved {os.path.abspath(path)} + PNG and CSV")
+            d = load(path)
+            linescan.export_csv(d)
+            linescan.save_all(d)
+            return d, self._phase_compute(d, ref)
+
+        def finish(r):                              # back in the window
+            d, pr = r
+            if self.thread is None:                 # no new line scan running meanwhile
+                self.line_data = d
+                self._redraw_line()
+            self._phase_show(d, pr)
+            self.statusBar().showMessage(("Line scan finished" if done else "Line scan "
+                                          "stopped") + f" - saved {os.path.abspath(path)} "
+                                          "+ PNG and CSV")
+        self._post("the line scan", work, finish)
 
     def on_line_failed(self, tb):
         self._cleanup()
@@ -3012,18 +3049,21 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             self.statusBar().showMessage(f"Could not update notes: {e}")
         self.remember_experiment()
-        try:
+        def work():                                 # background thread
             from sweeps import load_sweep, export_csv, save_all
-            self.sweep_data = load_sweep(path)
-            export_csv(self.sweep_data)
-            save_all(self.sweep_data)
-            self._redraw_sweep()
-        except Exception as e:
-            self.statusBar().showMessage(f"CSV/figure export failed: {e}")
-            return
-        self.statusBar().showMessage(("Sweep finished" if done else "Sweep stopped") +
-                                     f" - saved {os.path.abspath(path)} + PNG and CSV")
-        self.toast("Sweep finished" if done else "Sweep stopped", "info")
+            d = load_sweep(path)
+            export_csv(d)
+            save_all(d)
+            return d
+
+        def finish(d):                              # back in the window
+            if self.thread is None:
+                self.sweep_data = d
+                self._redraw_sweep()
+            self.statusBar().showMessage(("Sweep finished" if done else "Sweep stopped") +
+                                         f" - saved {os.path.abspath(path)} + PNG and CSV")
+            self.toast("Sweep finished" if done else "Sweep stopped", "info")
+        self._post("the sweep", work, finish)
 
     def on_sweep_failed(self, tb):
         self._cleanup()
@@ -3668,47 +3708,87 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"Could not update notes: {e}")
         self.remember_experiment()
         self._cleanup()
-        csv_dir = ""
-        try:
-            from scanner import export_csv, load
+        ref = self._phase_ref()
+
+        def work():                                 # background thread
+            from scanner import export_csv
+            from figures import save_all
             saved = load(path)
             csv_dir = export_csv(saved)
-            from figures import save_all
             save_all(saved)
-        except Exception as e:
-            self.statusBar().showMessage(f"CSV/figure export failed: {e}")
-            saved = None
-        if saved is not None:
-            self._auto_phase(saved)
-        self._cursor_update()
-        self.statusBar().showMessage(("Finished" if done else "Stopped") +
-                                     f" - saved {os.path.abspath(path)}"
-                                     + (" + figure (PNG) and CSV files" if csv_dir else ""))
+            return saved, csv_dir, self._phase_compute(saved, ref)
 
-    def _auto_phase(self, d, show=True):
-        """After every map / line scan: find the phase from the data and, if there is a
-        clear signal, save the rotated copy <name>_phased.h5 (+ CSV, PNG) and show it."""
+        def finish(r):                              # back in the window
+            saved, csv_dir, pr = r
+            self._phase_show(saved, pr)
+            self._cursor_update()
+            self.statusBar().showMessage(("Finished" if done else "Stopped") +
+                                         f" - saved {os.path.abspath(path)}"
+                                         + (" + figure (PNG) and CSV files" if csv_dir else ""))
+        self._post("the map", work, finish)
+
+    def _saving(self):
+        """True while CSV / figures / phase copy of a measurement are being saved."""
+        return bool(getattr(self, "_post_jobs", []))     # until its result is shown
+
+    def _post(self, what, work, finish):
+        """Run work() in the background; then finish(result) here. While it runs the
+        status bar says so and the window stays usable."""
+        self._post_jobs = getattr(self, "_post_jobs", [])
+        job = _PostJob(work)
+        self._post_jobs.append(job)
+        self.statusBar().showMessage(f"Saving {what} (CSV, figures, phase copy)… the window "
+                                     "stays usable.")
+
+        def end(result, err):
+            if job in self._post_jobs:
+                self._post_jobs.remove(job)
+            if err:
+                self.statusBar().showMessage("Saving CSV / figures failed (the .h5 data "
+                                             "file is saved).")
+                self.toast("CSV / figure export failed: " + err.strip().splitlines()[-1],
+                           "warn")
+                return
+            finish(result)
+        job.callback = end
+        job.thread.start()
+
+    @staticmethod
+    def _phase_compute(d, ref):
+        """The phase correction without the window (safe in a background thread).
+        -> (res, path of the copy or None, error text or None)."""
         import phase
         if getattr(d, "phase", None):              # already a corrected copy
-            return
+            return None, None, None
         try:
             X, Y = phase.processed_xy(d)
-            ref = self._phase_ref()
             res = phase.find_phase(X, Y, ref_deg=ref)
             res["ref_used"] = ref
             saved = phase.write_copy(d, res) if res.get("ok") else None
-            if saved:
-                self._remember_angle(res["phase_deg"])
+            return res, saved, None
         except Exception as e:
-            self.toast(f"Phase correction failed: {e}", "warn")
+            return None, None, str(e)
+
+    def _phase_show(self, d, pr, show=True):
+        res, saved, err = pr
+        if err:
+            self.toast(f"Phase correction failed: {err}", "warn")
             return
-        if saved is None:
+        if res is None:
+            return
+        if saved:
+            self._remember_angle(res["phase_deg"])
+        else:
             self.toast("Phase correction: " + res.get("message", ""), "info")
-        if show and (saved is not None):
+        if show and saved is not None:
             if getattr(self, "phase_dialog", None) is not None:
                 self.phase_dialog.close()
             self.phase_dialog = PhaseDialog(self, d, res, saved)
             self.phase_dialog.show()
+
+    def _auto_phase(self, d, show=True):
+        """Phase correction of d now (in the window); see _phase_compute."""
+        self._phase_show(d, self._phase_compute(d, self._phase_ref()), show)
 
     def _remember_angle(self, deg):
         """Remember the angle used, for the sign of the next map: in config.yaml and in
@@ -3907,6 +3987,18 @@ class MainWindow(QtWidgets.QMainWindow):
                     "middle of a command). Wait a moment and close again.")
                 ev.ignore()
                 return
+        jobs = [j for j in getattr(self, "_post_jobs", []) if j.thread.is_alive()]
+        if jobs:                                    # let the CSV / figures finish first
+            self.statusBar().showMessage("Finishing saving the last measurement…")
+            QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
+            try:
+                t0 = time.time()
+                while any(j.thread.is_alive() for j in jobs) and time.time() - t0 < 600:
+                    QtWidgets.QApplication.processEvents(
+                        QtCore.QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents, 100)
+                    time.sleep(0.05)
+            finally:
+                QtWidgets.QApplication.restoreOverrideCursor()
         self.remember_experiment()
         for t in self.findChildren(QtCore.QTimer):
             t.stop()

@@ -1,6 +1,10 @@
 # Changelog
 
 ## 1.2.12 (in testing)
+- **No more freezing at the end of a long measurement:** CSV, figures and the phase copy
+  are now made in the background after a map, line scan or point sweep. The window stays
+  usable; the status bar says "Saving …" until they are done. Closing the program waits
+  for the saving to finish (before, a long series could show "Not responding" at 99 %)
 - **Safer saving:** files are written to `<name>.h5.part` first and then swapped in, so a
   crash or power cut while saving no longer destroys the measurement saved so far. If an
   autosave fails during a measurement (e.g. the file is open in another program), you get

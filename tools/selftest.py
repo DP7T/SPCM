@@ -624,7 +624,7 @@ if HAVE_QT:
         w.yc.setValue(-4)
         w.start()
         t0 = time.time()
-        while w.thread is not None and time.time() - t0 < 120:
+        while (w.thread is not None or w._saving()) and time.time() - t0 < 120:
             pump(0.2)
         assert w.thread is None, "map scan did not finish"
         shot("map")
@@ -653,7 +653,7 @@ if HAVE_QT:
         assert abs(w._phase_ref() - pd.phi) < 0.01, (w._phase_ref(), pd.phi)
         w.start()
         t0 = time.time()
-        while w.thread is not None and time.time() - t0 < 120:
+        while (w.thread is not None or w._saving()) and time.time() - t0 < 120:
             pump(0.2)
         msg2 = w.phase_dialog.res.get("message", "")
         print("      second map: " + msg2.split("Sign")[0][-60:] + "| " +
@@ -691,7 +691,7 @@ if HAVE_QT:
         w.step.setValue(200)
         w.start()
         t0 = time.time()
-        while w.thread is not None and time.time() - t0 < 300:
+        while (w.thread is not None or w._saving()) and time.time() - t0 < 300:
             pump(0.2)
         assert w.thread is None, "edge map did not finish"
         w.res_btn.setChecked(True)
@@ -714,7 +714,7 @@ if HAVE_QT:
         shot("line_tab")
         w.start()
         t0 = time.time()
-        while w.thread is not None and time.time() - t0 < 300:
+        while (w.thread is not None or w._saving()) and time.time() - t0 < 300:
             pump(0.2)
         assert w.thread is None and w.line_data is not None, "line scan did not finish"
         ld = w.line_data
@@ -814,7 +814,7 @@ if HAVE_QT:
         w.sw_navg.setValue(3)
         w.start()
         t0 = time.time()
-        while w.thread is not None and time.time() - t0 < 600:
+        while (w.thread is not None or w._saving()) and time.time() - t0 < 600:
             pump(0.2)
         assert w.thread is None and w.sweep_data is not None, "sweep did not finish"
         shot("sweep_bias_power")
@@ -831,7 +831,7 @@ if HAVE_QT:
         shot("sweep_finest_tab")
         w.start()
         t0 = time.time()
-        while w.thread is not None and time.time() - t0 < 300:
+        while (w.thread is not None or w._saving()) and time.time() - t0 < 300:
             pump(0.2)
         assert w.thread is None and w.sweep_data is not None, "finest sweep did not finish"
         assert w.sweep_data.settings.finest
@@ -848,7 +848,7 @@ if HAVE_QT:
         shot("iv_tab")
         w.start()
         t0 = time.time()
-        while w.thread is not None and time.time() - t0 < 300:
+        while (w.thread is not None or w._saving()) and time.time() - t0 < 300:
             pump(0.2)
         assert w.thread is None, "I-V did not finish"
         assert w.iv_data is not None and len(w.iv_data.rows) == 81
