@@ -35,7 +35,7 @@ the real hardware and report back with screenshots. Write in plain language for 
 | `settings_dialog.py` | hardware settings window; writes `config.yaml` |
 | `numparse.py` | SI-prefix number parsing and the `SISpinBox` class |
 | `naming.py` | measurement names from a pattern, one folder per measurement |
-| `iv.py` | quick DC I–V: `IVSettings`, `bias_points()` (cycles 0→max→min→0), `IVData` (h5/CSV/PNG), `IVWorker` |
+| `iv.py` | quick DC I–V: `IVSettings`, `bias_points()` (cycles 0→max→min→0), `IVData` (h5/CSV/PNG), `IVWorker`, optional line fit `fit_line`, `r_text`, `rename_with_r` |
 | `resolution.py` | spot size from an edge on the reflection map: profile, erf fit (no scipy), slant correction, save |
 | `phase.py` | phase correction after the measurement: `find_phase`, `rotate`, `write_copy` (`<name>_phased.h5`) |
 | `where.py` | `<name>_where.png` at the start of a line scan / point sweep: the map on screen with the line / spot marked (`save`, `inside`, `describe`); matplotlib without pyplot (safe next to background saving) |
@@ -85,6 +85,7 @@ the real hardware and report back with screenshots. Write in plain language for 
 
 **Quick I–V and resolution**
 - Quick I–V reads the SR570 output on **AUX IN 1** of the photocurrent SR830 (`OAUX? 1`); current = AUX voltage × SR570 sensitivity, which the user selects (the SR570 can't be read). SR570 filter OFF / LOW DRIFT and the cable move are done **by hand**; the program only reminds (`_switch_reminder`, on every switch map ↔ I–V, remembered in `ui.last_measurement`). Sweep = cycles of 0 → max → min → 0 (no other shapes: the user's separate Keithley program covers more). Inputs follow the usual convention: max/min in V, step in mV; values rounded to the SR570's 1 mV.
+- I–V fit (1.2.13, user's choices): optional (`IVSettings.fit`, `iv` config `fit`, off by default); straight line through the **whole sweep, all cycles together** (`iv.fit_line`); h5 group `fit`, info.txt, figure, live plot. Name field `{R}`: filled with the marker `RFIT` at start, `iv.rename_with_r` renames folder + files after the fit (`R12.3kOhm`, `Rnone` if no fit); `naming.make_name` counts `RFIT` names against `R*` folders.
 - Resolution: analysis of existing maps only (no fine line scan). Fit R = A + B·erf((x−x0)/(√2σ)); FWHM = 2.355σ, 10–90 % = 2.563σ.
 
 **Data**

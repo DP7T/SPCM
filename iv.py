@@ -35,6 +35,7 @@ class IVSettings:
     sensitivity: float = 1e-6   # SR570 A/V (front panel; can't be read)
     invert: bool = False        # not used (the SR570 has its own INVERT button)
     aux_in: int = 1
+    fit: bool = False           # straight-line fit I = V/R + I0 over the whole sweep
     sample: str = "sample"
     notes: str = ""
     conditions: dict = field(default_factory=dict)
@@ -60,6 +61,74 @@ def bias_points(s):
         for a, b in ((0.0, s.v_max), (s.v_max, s.v_min), (s.v_min, 0.0)):
             pts += [(v, c) for v in _seg(a, b, s.step)]
     return [(round(v * 1000) / 1000, c) for v, c in pts]
+
+
+R_FIELD_MARK = "RFIT"     # stands for {R} in the name until the fit is known
+
+
+def fit_line(a):
+    """Straight line I = V/R + I0 through every point of the sweep (all cycles).
+    a: rows [bias_V, current_A, ...]. -> dict R_ohm, R_err_ohm, I0_A, I0_err_A, n,
+    r2 (how straight: 1 = perfectly), or None with fewer than 3 points / no bias
+    range."""
+    a = np.asarray(a, float)
+    if a.ndim != 2 or len(a) < 3:
+        return None
+    V, I = a[:, 0], a[:, 1]
+    ok = np.isfinite(V) & np.isfinite(I)
+    V, I = V[ok], I[ok]
+    if len(V) < 3 or np.ptp(V) <= 0:
+        return None
+    A = np.column_stack([V, np.ones_like(V)])
+    (g, i0), *_ = np.linalg.lstsq(A, I, rcond=None)
+    res = I - (g * V + i0)
+    n = len(V)
+    s2 = float(res @ res) / max(n - 2, 1)
+    cov = s2 * np.linalg.inv(A.T @ A)
+    g_err, i0_err = float(np.sqrt(cov[0, 0])), float(np.sqrt(cov[1, 1]))
+    ss = float(((I - I.mean()) ** 2).sum())
+    R = 1.0 / g if g != 0 else float("inf")
+    return {"R_ohm": float(R), "R_err_ohm": float(g_err / g ** 2) if g != 0 else float("inf"),
+            "I0_A": float(i0), "I0_err_A": i0_err, "n": int(n),
+            "r2": 1.0 - float(res @ res) / ss if ss > 0 else 1.0,
+            "conductance_S": float(g)}
+
+
+def r_text(R, err=None, name=False):
+    """12345 -> '12.3 kΩ' (or 'R12.3kOhm' for a file name)."""
+    if R is None or not np.isfinite(R):
+        return "Rinf" if name else "∞ Ω"
+    for f, p in ((1e12, "T"), (1e9, "G"), (1e6, "M"), (1e3, "k"), (1, ""), (1e-3, "m")):
+        if abs(R) >= f * 0.9995:
+            break
+    if name:
+        return f"R{R / f:.3g}{p}Ohm"
+    e = f" ± {err / f:.2g}" if err is not None and np.isfinite(err) else ""
+    return f"{R / f:.4g}{e} {p}Ω"
+
+
+def rename_with_r(path, R):
+    """Replace the {R} marker in the measurement's folder and file names by the fitted
+    resistance (e.g. R12.3kOhm). -> new path of the .h5 (unchanged if no marker)."""
+    folder = os.path.dirname(os.path.abspath(path))
+    old = os.path.splitext(os.path.basename(path))[0]
+    if R_FIELD_MARK not in old:
+        return path
+    new = old.replace(R_FIELD_MARK, r_text(R, name=True) if R is not None else "Rnone")
+    parent = os.path.dirname(folder)
+    target = os.path.join(parent, new) if os.path.basename(folder) == old else folder
+    if target != folder:
+        k = 2
+        base = new
+        while os.path.exists(target):            # name taken: _2, _3 ...
+            new = f"{base}_{k}"
+            target = os.path.join(parent, new)
+            k += 1
+        os.rename(folder, target)
+    for f in os.listdir(target):
+        if f.startswith(old):
+            os.rename(os.path.join(target, f), os.path.join(target, new + f[len(old):]))
+    return os.path.join(target, new + ".h5")
 
 
 class IVData:
@@ -100,6 +169,13 @@ class IVData:
             for k, v in s.conditions.items():
                 exp.attrs[k] = str(v)
             exp.attrs["notes"] = s.notes
+            ft = fit_line(self.array()) if getattr(s, "fit", False) else None
+            if ft:
+                g = f.create_group("fit")
+                for k, v in ft.items():
+                    g.attrs[k] = v
+                g.attrs["note"] = ("straight line I = V/R + I0 through every point of the "
+                                   "sweep (all cycles), least squares")
             ds = f.create_dataset("iv", data=self.array())
             ds.attrs["columns"] = ", ".join(COLUMNS)
             ds.attrs["note"] = ("one row per bias point: column 1 bias (V), column 2 "
@@ -149,6 +225,13 @@ def export_csv(d):
         fh.write(f"Sweep: {s.cycles} cycle(s) of 0 → {s.v_max:g} → {s.v_min:g} → 0 V, "
                  f"step {s.step * 1000:g} mV, wait {s.wait_ms:g} ms, "
                  f"{s.n_avg} readings averaged per point\n")
+        ft = fit_line(a) if getattr(s, "fit", False) else None
+        if ft:
+            fh.write(f"\nFit (straight line I = V/R + I0 through all points, all cycles):\n"
+                     f"  R = {r_text(ft['R_ohm'], ft['R_err_ohm'])}  "
+                     f"(R = {ft['R_ohm']:.6e} ± {ft['R_err_ohm']:.2e} Ohm)\n"
+                     f"  I0 = {ft['I0_A']:.4e} ± {ft['I0_err_A']:.1e} A (current at 0 V)\n"
+                     f"  r² = {ft['r2']:.5f} (1 = perfectly straight), {ft['n']} points\n")
         fh.write("\nExperiment:\n")
         for k, v in (s.conditions or {}).items():
             fh.write(f"  {k}: {v}\n")
@@ -180,7 +263,12 @@ def save_figure(d, path, dpi=200):
             ax.plot(a[sel, 0], a[sel, 1] / scale, "-o", ms=2.5, lw=1.2, color=col,
                     label=f"cycle {c}" if len(cycles) > 1 else None)
         ax.set_ylabel(f"Current ({pre}A)")
-        if len(cycles) > 1:
+        ft = fit_line(a) if getattr(d.settings, "fit", False) else None
+        if ft:
+            vv = np.array([a[:, 0].min(), a[:, 0].max()])
+            ax.plot(vv, (vv / ft["R_ohm"] + ft["I0_A"]) / scale, "--", color="#c62828",
+                    lw=1.4, label=f"fit: R = {r_text(ft['R_ohm'], ft['R_err_ohm'])}")
+        if len(cycles) > 1 or ft:
             ax.legend(fontsize=9)
     ax.axhline(0, color="0.7", lw=0.8)
     ax.axvline(0, color="0.7", lw=0.8)

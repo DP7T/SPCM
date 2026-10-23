@@ -184,6 +184,8 @@ The **I–V** tab (left) measures the DC current against the bias from the SR570
 - **Wait per point (ms)** and **Readings per point**: after each bias step the program waits, then averages that many AUX IN readings.
 - **Sensitivity**: the SR570 front-panel sensitivity. The current is AUX IN voltage × sensitivity, so this must match the front panel.
 - **Sign:** if a positive bias gives a negative current, use the SR570's own **INVERT** button.
+- **Fit a straight line (resistance R)** (tick box, off by default, remembered): fits I = V/R + I0 through every point of the sweep, all cycles together. The fit line and R ± its error are shown on the live plot and in the PNG; R, I0 and r² (how straight: 1 = perfectly) go into the h5 (`fit` group) and info.txt.
+  - **R in the file name:** add `{R}` to the file-name pattern (field menu "Resistance from the I–V fit"). The name is fixed before the sweep, so the folder and its files are renamed when the fit is done, e.g. `sample_IV_R12.3kOhm_001`. Written as "Ohm", not "Ω", so every program can open it.
 
 Press **Start I–V**, the Start button on this tab. The **Plot** tab on the right shows the curve live, one colour per cycle.
 

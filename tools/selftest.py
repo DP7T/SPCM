@@ -551,6 +551,20 @@ def _():
     assert d.completed and a.shape == (len(pts), 5)
     k = np.argmin(abs(a[:, 0] - 0.5))
     assert 1e-7 < a[k, 1] < 1e-6, a[k]              # simulated device: ~0.27 µA at 0.5 V
+    ft = iv.fit_line(a)
+    assert ft and np.isfinite(ft["R_ohm"]) and ft["R_ohm"] > 0, ft
+    import tempfile
+    import naming
+    tmp = tempfile.mkdtemp()
+    nm = naming.make_name("{sample}_{R}_{n}", {"sample": "s", "R": iv.R_FIELD_MARK}, tmp)
+    pth = naming.measurement_path(tmp, nm)
+    open(pth, "w").close()
+    q = iv.rename_with_r(pth, 12345.0)
+    assert os.path.basename(q) == "s_R12.3kOhm_001.h5" and os.path.exists(q), q
+    assert naming.make_name("{sample}_{R}_{n}", {"sample": "s", "R": iv.R_FIELD_MARK},
+                            tmp).endswith("_002"), "number must count renamed I-Vs"
+    print(f"      I-V fit: R = {iv.r_text(ft['R_ohm'], ft['R_err_ohm'])}, "
+          f"r² = {ft['r2']:.3f}; name {os.path.basename(q)}")
     assert HW.bias.value == 0.0, "bias not back at 0"
     iv.export_csv(d)
     iv.save_all(d)
@@ -855,6 +869,9 @@ if HAVE_QT:
         w.iv_step.setValue(50)
         w.iv_cycles.setValue(2)
         w.iv_wait.setValue(0)
+        w.iv_fit.setChecked(True)
+        pat0 = w.name_pat.currentText()
+        w.name_pat.setEditText("{sample}_{type}_{R}_{n}")
         shot("iv_tab")
         w.start()
         t0 = time.time()
@@ -862,7 +879,13 @@ if HAVE_QT:
             pump(0.2)
         assert w.thread is None, "I-V did not finish"
         assert w.iv_data is not None and len(w.iv_data.rows) == 81
+        ivn = os.path.basename(w.iv_data.path)
+        assert "Ohm" in ivn and "RFIT" not in ivn and os.path.exists(w.iv_data.path), ivn
+        assert os.path.exists(os.path.splitext(w.iv_data.path)[0] + ".png"), "figure not renamed"
+        print("      I-V with fit, name: " + ivn)
         shot("iv")
+        w.name_pat.setEditText(pat0)
+        w.iv_fit.setChecked(False)
         w._toggle_dark(True)                      # the I-V plot follows the theme
         shot("iv_dark")
         w._toggle_dark(False)

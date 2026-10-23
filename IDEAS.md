@@ -4,6 +4,7 @@ Read together with [AGENTS.md](AGENTS.md). Each item says what the user decided.
 one at a time on `dev`, test on the microscope, then release as usual.
 
 Built in 1.2.6: point / line cursors, phase-lag view in the phase window.
+Built in 1.2.13: I–V straight-line fit with R in the file name.
 Rejected by the user (2026-10-21): phase memory per sample, the start hint, reading / saving
 the lock-in PHASE and the `{phase}` file-name field (that code is only on the branch
 `phase-memory-1.2.6`; don't bring it back without asking).
@@ -31,11 +32,3 @@ same amount, and save a drift-corrected copy (like `_phased`) together with the 
 shift per line (= a drift curve). For map series the same with a 2-D shift. No
 correction during the measurement (option 2 was not chosen). Ask before building.
 
-## 4. Quick I–V: optional fit, resistance in the file name (idea 2026-10-23, not built)
-The user wants an optional fit of the I–V and the resistance in the file name. Open
-questions (asked, not answered yet): straight line over the whole sweep or only around
-zero bias (range, e.g. ±50 mV) for non-linear devices; all cycles together or per cycle;
-the name is fixed before the sweep, so the folder / files would be renamed after the fit
-(field `{R}`, written as e.g. `R12.3kOhm`, no Ω) - or R only in the figure / files; fit
-line + R ± error on the live plot and figure, R, I0 and the fit range in h5 / info.txt;
-tick box, off = as today. Ask before building.

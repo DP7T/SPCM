@@ -3143,6 +3143,16 @@ class MainWindow(QtWidgets.QMainWindow):
         f.addRow("Cycles", self.iv_cycles)
         f.addRow("Wait per point (ms)", self.iv_wait)
         f.addRow("Readings per point", self.iv_navg)
+        self.iv_fit = QtWidgets.QCheckBox("Fit a straight line (resistance R)")
+        self.iv_fit.setChecked(bool(ivc.get("fit", False)))
+        self.iv_fit.setToolTip(
+            "I = V/R + I0 through every point of the sweep (all cycles). R is shown on "
+            "the plot and saved in the figure, h5 and info.txt. Put {R} in the file-name "
+            "pattern (field menu) to get it in the name, e.g. ..._R12.3kOhm_001: the "
+            "folder and files are renamed when the fit is done.")
+        self.iv_fit.toggled.connect(lambda on: (self._save_setting("iv", "fit", bool(on)),
+                                                self._redraw_iv()))
+        f.addRow(self.iv_fit)
         self.iv_eta = QtWidgets.QLabel("-")
         f.addRow("Est. time", self.iv_eta)
         lay.addWidget(g)
@@ -3195,6 +3205,7 @@ class MainWindow(QtWidgets.QMainWindow):
             wait_ms=self.iv_wait.value(), n_avg=self.iv_navg.value(),
             sensitivity=float(self.iv_sens.currentData()),
             aux_in=int((self.config.get("iv", {}) or {}).get("aux_in", 1)),
+            fit=self.iv_fit.isChecked(),
             sample=self.sample.text() or "sample", notes=self.exp_notes.toPlainText(),
             conditions=self.conditions())
 
@@ -3289,7 +3300,17 @@ class MainWindow(QtWidgets.QMainWindow):
                    symbolSize=4, symbolPen=None, symbolBrush=col,
                    name=f"cycle {c}" if len(cycles) > 1 else None)
         last = a[-1]
-        p.setTitle(f"{last[0]:+.3f} V   {si(last[1], 'A')}")
+        title = f"{last[0]:+.3f} V   {si(last[1], 'A')}"
+        if self.iv_fit.isChecked():
+            import iv
+            ft = iv.fit_line(a)
+            if ft:
+                vv = np.array([a[:, 0].min(), a[:, 0].max()])
+                p.plot(vv, vv / ft["R_ohm"] + ft["I0_A"],
+                       pen=pg.mkPen("#c62828", width=1.5, style=QtCore.Qt.DashLine),
+                       name="fit")
+                title += f"   ·   fit: R = {iv.r_text(ft['R_ohm'], ft['R_err_ohm'])}"
+        p.setTitle(title)
 
     def on_iv_finished(self, path):
         done = self.iv_data.completed
@@ -3312,6 +3333,13 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             self.statusBar().showMessage(f"CSV/figure export failed: {e}")
             return
+        if iv.R_FIELD_MARK in os.path.basename(path):     # {R} in the name: fill it in
+            ft = iv.fit_line(self.iv_data.array()) if self.iv_data.settings.fit else None
+            try:
+                path = iv.rename_with_r(path, ft["R_ohm"] if ft else None)
+                self.iv_data.path = path
+            except OSError as e:
+                self.toast(f"Could not put R into the file name: {e}", "warn")
         self.statusBar().showMessage(("I–V finished" if done else "I–V stopped")
                                      + f" - saved {os.path.abspath(path)} + PNG and CSV")
 
@@ -3560,6 +3588,9 @@ class MainWindow(QtWidgets.QMainWindow):
         v.update({k: val for k, val in self.experiment_fields()})
         if kind == "iv":
             v["type"] = "IV"
+            if getattr(s, "fit", False):
+                import iv
+                v["R"] = iv.R_FIELD_MARK      # replaced by the fitted R afterwards
             if s is not None:
                 v["bias"] = naming.range_text([s.v_min, s.v_max], "V")
             v["power"] = self._power_now_text()

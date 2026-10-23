@@ -30,6 +30,7 @@ FIELDS = [
     ("bias", "Bias (-1to1V)"),
     ("mode", "Scan mode (step / fly)"),
     ("type", "Type (map, line, powersweep …)"),
+    ("R", "Resistance from the I–V fit (R12.3kOhm)"),
     ("n", "Number (001, 002 …)"),
 ]
 
@@ -79,15 +80,22 @@ def make_name(pattern, values, folder):
     name is taken."""
     pattern = pattern or DEFAULT_PATTERN
     base = fill(pattern, values)
+
+    def taken(name):
+        if "RFIT" in name:          # {R} of an I-V: filled in after the fit (R12kOhm ...)
+            import glob
+            return bool(glob.glob(os.path.join(glob.escape(folder),
+                                               glob.escape(name).replace("RFIT", "R*"))))
+        return os.path.exists(os.path.join(folder, name))
     if "\x00" in base:
         for k in range(1, 10000):
             name = base.replace("\x00", f"{k:03d}")
-            if not os.path.exists(os.path.join(folder, name)):
+            if not taken(name):
                 return name
-    if not os.path.exists(os.path.join(folder, base)):
+    if not taken(base):
         return base
     k = 2
-    while os.path.exists(os.path.join(folder, f"{base}_{k}")):
+    while taken(f"{base}_{k}"):
         k += 1
     return f"{base}_{k}"
 
