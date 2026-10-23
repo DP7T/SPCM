@@ -1,0 +1,28 @@
+Quick I-V
+Sample: sample
+Started: 2026-10-23T09:04:50
+Completed: True
+
+iv.csv: numbers only, one row per bias point. Columns:
+  1 bias (V), 2 current (A), 3 cycle, 4 time (s), 5 AUX IN voltage (V)
+Current = AUX IN 1 voltage × 1e-06 A/V (SR570 sensitivity)
+Sweep: 2 cycle(s) of 0 → 0.5 → -0.5 → 0 V, step 50 mV, wait 0 ms, 5 readings averaged per point
+
+Fit (straight line I = V/R + I0 through all points, all cycles):
+  R = 2.891 ± 0.009 MΩ  (R = 2.891170e+06 ± 9.03e+03 Ohm)
+  I0 = 1.7263e-09 ± 3.1e-10 A (current at 0 V)
+  r² = 0.99923 (1 = perfectly straight), 81 points
+
+Experiment:
+  Polarization: 
+  Temperature: 
+  Pressure: 
+  Laser wavelength: 
+  Objective: 
+  Modulation frequency: 
+  Gate voltage: 
+
+Notes:
+
+
+Instruments: {"stage": "Simulated Tango", "lockin_photocurrent": "Simulated SR830 (photocurrent)", "lockin_reflection": "Simulated SR830 (reflection)", "bias": "Simulated bias", "accessories": {"powermeter": "Simulated PM100USB", "camera": "Simulated CS165CU"}, "simulated": true}

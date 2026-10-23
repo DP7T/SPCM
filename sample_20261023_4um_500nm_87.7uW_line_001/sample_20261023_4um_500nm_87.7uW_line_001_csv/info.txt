@@ -1,0 +1,79 @@
+Line scan
+Sample: sample
+Started: 2026-10-23T09:03:26
+Completed: True
+From (3.000, 0.000) to (7.000, -0.000) µm (from the origin), 4.000 µm long, 9 points, step 500.0 nm
+Line marked on the map: sample_20261023_8x2um_200nm_84.6uW_001.h5 (x 1.00 … 9.00 µm, y -1.00 … 1.00 µm (from the origin), step 200 nm) (picture: _where.png)
+Photocurrent conversion: raw × √2 (lock-in only) = peak (amplitude) [V]
+
+line.csv: numbers only, one row per point. Columns:
+  1: distance (µm)
+  2: x (µm)
+  3: y (µm)
+  4: photocurrent X (V)
+  5: photocurrent Y (V)
+  6: photocurrent R (V)
+  7: photocurrent theta (deg)
+  8: photocurrent X std (V)
+  9: photocurrent Y std (V)
+  10: photocurrent R std (V)
+  11: reflection X (V)
+  12: reflection Y (V)
+  13: reflection R (V)
+  14: reflection theta (deg)
+  15: reflection X std (V)
+  16: reflection Y std (V)
+  17: reflection R std (V)
+
+Experiment:
+  Polarization: 
+  Temperature: 
+  Pressure: 
+  Laser wavelength: 
+  Objective: 
+  Modulation frequency: 
+  Gate voltage: 
+
+Notes:
+
+
+Settings:
+  x_center: -3.0
+  y_center: 0.0
+  origin: corner
+  origin_x: 0.0
+  origin_y: 0.0
+  flip_x: True
+  flip_y: True
+  angle_deg: 180.0
+  x_dir: 1
+  y_dir: 1
+  x_size: 4.0
+  y_size: 0.0
+  step: 0.5
+  serpentine: False
+  settle_tc: 3.0
+  settle_auto: True
+  backlash_um: 1.0
+  extra_settle_ms: 0.0
+  auto_range: False
+  n_avg: 3
+  where_map: sample_20261023_8x2um_200nm_84.6uW_001.h5 (x 1.00 … 9.00 µm, y -1.00 … 1.00 µm (from the origin), step 200 nm)
+  biases: [None]
+  sample: sample
+  power_lock: False
+  target_power_uW: None
+  power_tol_pct: 1.0
+  mode: step
+  amp_mode: lockin
+  amp_value: 1.0
+  signal_as: peak
+  lockin_unit: V
+  scan_type: line
+  outer: bias
+  outer_values: []
+
+Per line (lock-in settings read from the front panels; for a power series also the power reached):
+  line0: {"angle_deg": 180.0, "bias_V": NaN, "chop_freq_Hz": 1013.0, "laser_over_range_end": false, "laser_over_range_start": false, "laser_power_on_sample_uW_end": 87.51517043270069, "laser_power_on_sample_uW_start": 88.04378597406713, "laser_power_uW_end": 87.51517043270069, "laser_power_uW_start": 88.04378597406713, "laser_range_uW_end": 1000.0, "laser_range_uW_start": 1000.0, "laser_wavelength_nm": 532, "meter_to_sample_ratio": 1.0, "note": "line scan: images have 1 row; columns follow the line from start to end (distance_um)", "overload_lines": 0, "readings_per_point": 3, "sens_pc": 1e-08, "sens_refl": 0.1, "tau_pc_s": 0.001, "tau_refl_s": 0.001, "wait_s": 0.007}
+
+Instruments: {"stage": "Simulated Tango", "lockin_photocurrent": "Simulated SR830 (photocurrent)", "lockin_reflection": "Simulated SR830 (reflection)", "bias": "Simulated bias", "accessories": {"powermeter": "Simulated PM100USB", "camera": "Simulated CS165CU"}, "simulated": true}

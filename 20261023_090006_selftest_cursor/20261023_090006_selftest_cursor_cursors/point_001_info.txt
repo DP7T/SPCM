@@ -1,0 +1,19 @@
+Cursor values from 20261023_090006_selftest_cursor.h5 (nearest measured pixel, not interpolated)
+Point: (-5.0000, -1.0000) µm from the origin; one row per map of the series
+corrected X', Y' = phase-corrected copy, rotated by +12.16°
+photocurrent = converted (as in the maps); lock-in = as read; reflection = as read
+
+Columns:
+  1: Bias (V)
+  2: photocurrent X (V)
+  3: photocurrent Y (V)
+  4: photocurrent R (V)
+  5: photocurrent theta (deg)
+  6: corrected X' (V)
+  7: corrected Y' (V)
+  8: lock-in X (as read)
+  9: lock-in Y (as read)
+  10: reflection X (V)
+  11: reflection Y (V)
+  12: reflection R (V)
+  13: reflection theta (deg)

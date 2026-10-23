@@ -1,0 +1,20 @@
+Resolution from a reflection edge
+
+FWHM          1156.1 nm
+10-90 % width 1258.4 nm
+sigma         491.0 nm
+Map file: sample_20261023_8x2um_200nm_84.6uW_001.h5
+Reflection channel: R
+Line from (µm): (3.400, 0.000)
+Line to (µm): (6.600, 0.000)
+Band width averaged (µm): 0.400
+Re-measured perpendicular to the edge: False
+Map step (nm): 200
+Wavelength (nm): 532
+Objective NA: 0.90
+Diffraction limit 0.51 λ/NA (nm): 301
+
+Fit: R(x) = A + B·erf((x − x0)/(√2·σ)); FWHM = 2.355σ, 10–90 % = 2.563σ
+A = 0.0542077 V, B = 0.0185133 V, x0 = 1.6027 µm, rms residual 0.000177 V, 65 points
+
+CSV columns (numbers only): distance along the line (µm), reflection (V), fit (V)

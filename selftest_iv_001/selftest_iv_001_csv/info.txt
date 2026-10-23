@@ -1,0 +1,16 @@
+Quick I-V
+Sample: selftest_iv
+Started: 2026-10-23T09:03:01
+Completed: True
+
+iv.csv: numbers only, one row per bias point. Columns:
+  1 bias (V), 2 current (A), 3 cycle, 4 time (s), 5 AUX IN voltage (V)
+Current = AUX IN 1 voltage × 1e-06 A/V (SR570 sensitivity)
+Sweep: 2 cycle(s) of 0 → 0.5 → -0.5 → 0 V, step 50 mV, wait 0 ms, 2 readings averaged per point
+
+Experiment:
+
+Notes:
+
+
+Instruments: {"stage": "Simulated Tango", "lockin_photocurrent": "Simulated SR830 (photocurrent)", "lockin_reflection": "Simulated SR830 (reflection)", "bias": "Simulated bias", "accessories": {"powermeter": "Simulated PM100USB", "camera": "Simulated CS165CU"}, "simulated": true}

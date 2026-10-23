@@ -1,0 +1,55 @@
+ok    file names  (0.0 s)
+ok    laser power: monotonic 2 mV steps, abort  (7.1 s)
+ok    map scan, step mode (+ bias), save/load/CSV/figure  (12.1 s)
+      fly pixels without a reading (left empty, not filled in): 0
+ok    map scan, fly mode  (2.8 s)
+ok    bias series: laser power set again before every bias (maps and lines)  (10.5 s)
+      step: 1 range change(s), now 5 nV, max signal 52 % of full scale
+      fly: 1 range change(s), now 5 nV, max signal 45 % of full scale
+ok    auto range up: no saturation (map, fly map, point sweep)  (28.6 s)
+      Phase +12.0° ± 0.2° from 201 pixels above 5× noise: one clear phase (Y after the correction is only noise). (Same as raising the lock-in PHASE by 12.0°.) Same phase in every map of the series. Sign: most of the signal positive (no earlier angle to follow).
+      spike ignored, sign follows the last angle, series checked
+ok    phase correction: angle, copy (raw kept), no copy for pure noise, substrate  (9.3 s)
+      point and line read; line has 17 points; CSV columns match info.txt
+ok    cursors: nearest pixel at a point and along a line, all maps, raw + corrected, CSV  (9.2 s)
+      garbled reply read again; no overlapping bus access from two threads
+ok    lock-ins: one at a time on the GPIB bus; a garbled reply is read again  (0.2 s)
+      finest: 18 steps up, 17 down, alpha 0.83
+ok    point sweep, finest: every SINE OUT step up (and down), trimmed, saved  (14.9 s)
+ok    stage: a move that stops off target is retried once, then refused  (0.2 s)
+ok    bias ramp remembers the last value really sent when a step fails  (0.0 s)
+ok    fly scan: Stop halts the stage at once  (0.8 s)
+ok    series of maps over laser power (2 mV steps), SINE OUT back  (17.7 s)
+ok    point sweeps: power, bias, bias x power  (99.6 s)
+      12-line series: colour bar instead of legend; interrupted save: old file intact
+ok    line scans: bias series and power series  (30.2 s)
+ok    camera calibration (simulated)  (2.2 s)
+      I-V fit: R = 2.891 ± 0.0089 MΩ, r² = 0.999; name s_R12.3kOhm_001.h5
+ok    quick I-V (cycles, AUX IN), save/load/CSV/figure  (0.6 s)
+ok    resolution from an edge (fit, slanted line)  (0.4 s)
+      window 1600 x 950, smallest possible 1352 x 390
+         1352  QWidget  
+          898  QTabWidget  
+          894  QWidget  
+          894  QStackedWidget  
+          736  QWidget  
+      phase found after the map: +11.8° (simulation: +12°)
+      second map:  only noise). (Same as raising the lock-in PHASE by 12.0°.) | follows the first map
+      next map: sample_20261023_12x8um_1000nm_84.5uW_001
+      resolution on the simulated edge: FWHM 1156 nm
+      line scan: Line marked on the map: sample_20261023_8x2um_200nm_84.6uW_001.h5 (x 1.00 … 9.00 µm, y -1.00 … 1.00 µm (from t
+      line from the Line tab: 9 points, 3 readings each (mean + std saved)
+      Laser now: (+2.00, -1.50) µm, 2.50 µm from the origin
+      outline of the next scan: start (3, 2), arrows follow 'Scan towards'
+      camera: outline of the next scan starts at the drawn frame's corner
+      point sweep: _where.png saved
+      finest estimate: ≈ 12 points ≈ 0.0 min (estimate)
+      I-V with fit, name: sample_IV_R2.89MOhm_001.h5
+      fit ticked, pattern without {R}: sample_IV_RFIT_002 (RFIT = R after the fit)
+C:\hostedtoolcache\windows\Python\3.12.10\x64\Lib\site-packages\pyvisa_py\tcpip.py:443: UserWarning: TCPIP:instr resource discovery is limited to the default interface.Install psutil: pip install psutil if you want to scan all interfaces.
+  warnings.warn(
+C:\hostedtoolcache\windows\Python\3.12.10\x64\Lib\site-packages\pyvisa_py\tcpip.py:122: UserWarning: TCPIP::hislip resource discovery requires the zeroconf package to be installed... try 'pip install zeroconf'
+  warnings.warn(
+ok    main window off-screen (screenshots)  (112.1 s)
+
+All tests passed. Output in D:\a\SPCM\SPCM\selftest_out
