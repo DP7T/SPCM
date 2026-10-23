@@ -110,6 +110,7 @@ class ScanSettings:
     extra_settle_ms: float = 0.0
     auto_range: bool = False       # photocurrent lock-in: next range up above AUTO_RANGE_FRAC
     n_avg: int = 1                 # readings per point (line scans), ~1 tau apart; 1 = like a map
+    where_map: str = ""            # line scans: the map the line was marked on (_where.png)
     biases: list = field(default_factory=lambda: [None])  # None = don't touch bias
     sample: str = "sample"
     notes: str = ""
@@ -1350,6 +1351,9 @@ class ScanWorker(QtCore.QObject):
                     if os.path.exists(self.path):
                         os.remove(self.path)
                     folder = os.path.dirname(self.path)
+                    wp = os.path.splitext(self.path)[0] + "_where.png"
+                    if os.path.exists(wp):           # nothing measured: no picture
+                        os.remove(wp)
                     if os.path.isdir(folder) and not os.listdir(folder):
                         os.rmdir(folder)
             except OSError:

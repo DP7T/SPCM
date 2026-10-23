@@ -36,6 +36,7 @@ class SweepSettings:
     y_stage: float = 0.0
     u: float = 0.0                  # same spot from the origin (0, 0), program axes
     v: float = 0.0
+    where_map: str = ""             # the map the spot was marked on (_where.png)
     settle_auto: bool = True
     settle_tc: float = 3.0
     extra_settle_ms: float = 0.0
@@ -296,6 +297,8 @@ def export_csv(d):
         fh.write(f"Position: ({s.u:.3f}, {s.v:.3f}) µm from the origin = stage "
                  f"({s.x_stage:.3f}, {s.y_stage:.3f}) µm\n")
         fh.write(f"Photocurrent conversion: {formula} [{unit}]\n")
+        if getattr(s, "where_map", ""):
+            fh.write(f"Spot marked on the map: {s.where_map} (picture: _where.png)\n")
         fh.write(f"Each point: mean of {s.n_avg} readings; *_std = their standard "
                  "deviation\n")
         if s.finest:

@@ -137,6 +137,8 @@ The **Plot** tab on the right shows the result live:
 - for power sweeps, a **log-log plot** with a fitted power law |S| = A·P^α and the value of α (one per bias);
 - for bias × power, one curve per bias (with a legend) and a **bias–power map** coloured by the photocurrent or photovoltage.
 
+**Where you measured:** if the spot lies on the map shown, `<name>_where.png` is saved at the start: the map with a cross on the spot (and in info.txt which map it was, even if that map was a rough scan you discarded).
+
 Afterwards the SINE OUT goes back to where it was in 2 mV steps (untick *Put the SINE OUT back afterwards* if you don't want that) and the bias ramps back to 0 V. Like every measurement it gets its own folder (`powersweep`, `biassweep` or `biaspowersweep` in the name) with the .h5, a PNG with the same plots, and a `_csv` folder with `sweep.csv` (numbers only, one row per point, every channel with its spread; the columns are listed in `info.txt`) and, for bias × power, `photocurrent_X_matrix.csv`.
 
 ## Line scans
@@ -150,6 +152,10 @@ The **Line** tab (left) has its own settings, separate from the map:
 - Timing (wait), laser power and the preamp settings come from the Map and Instruments tabs.
 - **Start line**: the result appears in the Plot tab and is saved like a map (own folder,
   numbers-only CSV with the columns listed in info.txt, PNG).
+- **Where you measured:** when the line lies on the map shown, `<name>_where.png` is saved at
+  the start: the map (photocurrent and reflection) with the line, its start dot and an
+  arrow. info.txt says which map it was (its file name, or "map not saved" with its size
+  and place, e.g. a rough scan you discarded). No picture if the line is not on the map.
 
 ## Camera calibration
 

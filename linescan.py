@@ -119,6 +119,8 @@ def export_csv(d):
         fh.write(f"From ({u[0]:.3f}, {v[0]:.3f}) to ({u[-1]:.3f}, {v[-1]:.3f}) µm "
                  f"(from the origin), {dist[-1]:.3f} µm long, {len(dist)} points, "
                  f"step {s.step * 1000:.1f} nm\n")
+        if getattr(s, "where_map", ""):
+            fh.write(f"Line marked on the map: {s.where_map} (picture: _where.png)\n")
         fh.write(f"Photocurrent conversion: {formula} [{unit}]\n\n")
         ph = getattr(d, "phase", None)
         if ph:

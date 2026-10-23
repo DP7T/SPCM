@@ -1,6 +1,13 @@
 # Changelog
 
-## 1.2.12 (in testing)
+## 1.2.13 (in testing)
+- **Where you measured:** line scans and point sweeps save `<name>_where.png` when they
+  start: the map shown (photocurrent and reflection) with the line (start dot + arrow) or
+  a cross on the spot. info.txt says which map it was: its file name, or "map not saved"
+  with its size and place (e.g. a rough scan you discarded). No picture when the line or
+  spot is not on the map shown. Map only, not the camera
+
+## 1.2.12 (pre-release)
 - **No more freezing at the end of a long measurement:** CSV, figures and the phase copy
   are now made in the background after a map, line scan or point sweep. The window stays
   usable; the status bar says "Saving …" until they are done. Closing the program waits

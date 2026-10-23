@@ -2395,6 +2395,32 @@ class MainWindow(QtWidgets.QMainWindow):
         self._fill_line_tab(self.map_to_stage(self.data, u0, v0),
                             self.map_to_stage(self.data, u1, v1))
 
+    def _where_pts(self, stage_pts):
+        """The stage points in the axes of the map on screen, or None if there is no
+        map or they are not on it (then no _where.png)."""
+        if self.data is None or not np.isfinite(self.data.pc[..., 0]).any():
+            return None
+        try:
+            import where
+            pts = [tuple(float(c) for c in self._stage_to_map(self.data, X, Y))
+                   for X, Y in stage_pts]
+            return pts if where.inside(self.data, pts) else None
+        except Exception:
+            return None
+
+    def _save_where(self, pts, kind, h5_path, label):
+        """<name>_where.png: the map on screen with the line / point marked."""
+        if not pts:
+            return
+        import where
+        try:
+            where.save(self.data, pts, kind, os.path.splitext(h5_path)[0] + "_where.png",
+                       ib=max(self.map_sel.currentIndex(), 0),
+                       ch=self.ch_pc.currentIndex(), rch=self.ch_r.currentIndex(),
+                       label=label)
+        except Exception as e:
+            self.statusBar().showMessage(f"Could not save the _where picture: {e}")
+
     def start_line(self, start_stage, end_stage):
         """Scan along a line between two stage positions (µm), with the step, readings
         per point and series of the Line tab (timing, power, preamp from the Map and
@@ -2431,9 +2457,14 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self.refresh_lockins()
         self.remember_experiment()
+        pts = self._where_pts([start_stage, end_stage])
+        if pts:
+            import where
+            s.where_map = where.describe(self.data)
         self.worker = ScanWorker(self.hw, s, self.folder.text() or "data",
                                  self.config.get("power_lock", {}) or {},
                                  name=self.measurement_name("line", s))
+        self._save_where(pts, "line", self.worker.path, "Line scan: ")
         self.line_data = self.worker.data
         self.line_data.path = self.worker.path
         self.show_plot(self.line_view)
@@ -3007,8 +3038,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.remember_experiment()
         self._remember_sweep()
         self._show_spot()
+        pts = self._where_pts([(s.x_stage, s.y_stage)])
+        if pts:
+            import where
+            s.where_map = where.describe(self.data)
         self.worker = SweepWorker(self.hw, s, self.folder.text() or "data",
                                   name=self.measurement_name(s.kind, s))
+        self._save_where(pts, "point", self.worker.path, "Point sweep: ")
         self.sweep_data = self.worker.data
         self.sweep_data.path = self.worker.path
         self.show_plot(self.sweep_view)

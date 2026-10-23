@@ -718,6 +718,13 @@ if HAVE_QT:
             pump(0.2)
         assert w.thread is None and w.line_data is not None, "line scan did not finish"
         ld = w.line_data
+        wp = os.path.splitext(ld.path)[0] + "_where.png"
+        assert os.path.exists(wp), "no _where.png for the line drawn on the map"
+        info = open(os.path.join(os.path.splitext(ld.path)[0] + "_csv", "info.txt"),
+                    encoding="utf-8").read()
+        assert "Line marked on the map:" in info, info[:400]
+        print("      line scan: " + [x for x in info.splitlines()
+                                     if x.startswith("Line marked")][0][:110])
         assert ld.pc_std is not None and np.isfinite(ld.pc_std[..., 0]).any(), "no spread"
         from scanner import load as _load
         ld2 = _load(ld.path)
@@ -817,6 +824,9 @@ if HAVE_QT:
         while (w.thread is not None or w._saving()) and time.time() - t0 < 600:
             pump(0.2)
         assert w.thread is None and w.sweep_data is not None, "sweep did not finish"
+        wp = os.path.splitext(w.sweep_data.path)[0] + "_where.png"
+        print("      point sweep: _where.png " + ("saved" if os.path.exists(wp) else
+                                                  "not saved (spot not on the map shown)"))
         shot("sweep_bias_power")
         # finest through the GUI: powers list greyed, From / To shown, 1 reading
         w.sw_kind.setCurrentIndex(w.sw_kind.findData("power"))
