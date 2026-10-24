@@ -705,7 +705,7 @@ if HAVE_QT:
         w.side_tabs.widget(0).ensureWidgetVisible(w.name_prev["map"])
         shot("save_box")
         import re as _re
-        pv = w.name_prev["map"].text()
+        pv = w.name_prev["map"].text().replace("\u200b", "")
         assert _re.match(r"next: \d{8}_\d{4}_sample_532nm_map_12x8um_1000nm_", pv), pv
         print("      " + pv)
         mp = os.path.basename(w.data.path)

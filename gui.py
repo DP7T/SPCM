@@ -1088,9 +1088,25 @@ class MainWindow(QtWidgets.QMainWindow):
             lay_.insertWidget(max(lay_.count() - 1, 0), self._name_box(kind_))
         self.side_tabs.currentChanged.connect(self._name_changed)
         self._name_timer = QtCore.QTimer(self)      # keeps the time in the preview right
-        self._name_timer.setInterval(5000)
+        self._name_timer.setInterval(30000)
         self._name_timer.timeout.connect(self._name_changed)
         self._name_timer.start()
+        self._name_soon = QtCore.QTimer(self)       # after an edit: once, a moment later
+        self._name_soon.setSingleShot(True)
+        self._name_soon.setInterval(400)
+        self._name_soon.timeout.connect(self._name_changed)
+        for i in range(self.side_tabs.count()):     # any value changed in a tab
+            page = self.side_tabs.widget(i)
+            for w_ in page.findChildren(QtWidgets.QAbstractSpinBox):
+                if hasattr(w_, "valueChanged"):
+                    w_.valueChanged.connect(lambda *_: self._name_soon.start())
+            for w_ in page.findChildren(QtWidgets.QComboBox):
+                w_.currentIndexChanged.connect(lambda *_: self._name_soon.start())
+            for w_ in page.findChildren(QtWidgets.QCheckBox):
+                w_.toggled.connect(lambda *_: self._name_soon.start())
+            for w_ in page.findChildren(QtWidgets.QLineEdit):
+                if not isinstance(w_.parent(), QtWidgets.QAbstractSpinBox):
+                    w_.textChanged.connect(lambda *_: self._name_soon.start())
         QtCore.QTimer.singleShot(400, self._name_changed)
         QtCore.QTimer.singleShot(300, self._start_here_on_launch)
         self._init_preview()
@@ -3565,6 +3581,8 @@ class MainWindow(QtWidgets.QMainWindow):
         prev = QtWidgets.QLabel()
         prev.setWordWrap(True)
         prev.setStyleSheet("color:gray")
+        prev.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored,
+                           QtWidgets.QSizePolicy.Policy.Preferred)   # never widens the tab
         prev.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
         v.addWidget(prev)
         row = QtWidgets.QHBoxLayout()
@@ -3695,7 +3713,10 @@ class MainWindow(QtWidgets.QMainWindow):
                   "line": lambda: self._line_preview_settings(),
                   "point": lambda: self._sweep_settings(),
                   "iv": lambda: self._iv_settings()}
+        cur = {0: "map", 1: "line", 2: "point", 3: "iv"}.get(self.side_tabs.currentIndex())
         for tab, lab in self.name_prev.items():
+            if tab != cur and lab.text():
+                continue                  # only the tab you see (reads a little hardware)
             try:
                 s = makers[tab]()
                 kind = s.kind if tab == "point" else tab
@@ -3704,7 +3725,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 warn = (f"<br><span style='color:#c62828'>{len(name)} characters: long "
                         "names can hit the Windows path limit</span>"
                         if len(name) > naming.MAX_GOOD_LENGTH else "")
-                lab.setText(f"next: {name}{warn}")
+                shown = name.replace("RFIT", "R(fit)").replace("_", "_\u200b")  # can wrap
+                lab.setText(f"next: {shown}{warn}")
             except Exception:
                 lab.setText("next: – (fill in the values first)")
 
