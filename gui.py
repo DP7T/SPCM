@@ -34,6 +34,16 @@ def si(v, unit="", digits=3):
     return f"{v:.{digits}g} {unit}".strip()
 
 
+class _DoubleClickButton(QtWidgets.QPushButton):
+    """A button that acts on a double-click (a single click only shows a hint)."""
+    doubleClicked = QtCore.Signal()
+
+    def mouseDoubleClickEvent(self, ev):
+        if self.isEnabled():
+            self.doubleClicked.emit()
+        super().mouseDoubleClickEvent(ev)
+
+
 class _PostJob(QtCore.QObject):
     """Saving work after a measurement (CSV, figures, phase copy), done in a background
     thread so the window never freezes - a long series can take minutes. One job at a
@@ -846,50 +856,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self.build_iv_tab(iv_lay)
         self.build_sweep_tab(sweep_lay)
         self.build_line_tab(line_lay)
+        self._late_name_boxes = [(line_lay, "line"), (sweep_lay, "point"), (iv_lay, "iv")]
         for cb in side.findChildren(QtWidgets.QComboBox):     # narrow drop-downs
             cb.setSizeAdjustPolicy(
                 QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             cb.setMinimumContentsLength(10)
         left = scan_lay
-        g = QtWidgets.QGroupBox("Save")
+        # Sample and Folder: shared by every measurement, above the tabs
+        g = QtWidgets.QGroupBox()
         f = QtWidgets.QFormLayout(g)
+        f.setContentsMargins(8, 4, 8, 4)
         self.sample = QtWidgets.QLineEdit(d.get("sample", "sample"))
         self.folder = QtWidgets.QLineEdit(config.get("save_dir", "data"))
         f.addRow("Sample", self.sample)
         f.addRow("Folder", self.folder)
-        import naming
-        row = QtWidgets.QHBoxLayout()
-        self.name_pat = QtWidgets.QComboBox()
-        self.name_pat.setEditable(True)
-        self.name_pat.setSizeAdjustPolicy(
-            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.name_pat.setMinimumContentsLength(10)
-        pats = [d.get("file_pattern") or naming.DEFAULT_PATTERN, naming.DEFAULT_PATTERN,
-                "{sample}_{date}_{n}", "{date}_{sample}_{size}_{step}_{n}",
-                "{sample}_{date}_{size}_{step}_{power}_{bias}_{n}"]
-        for p_ in dict.fromkeys(pats):
-            self.name_pat.addItem(p_)
-        self.name_pat.setToolTip(
-            "How measurements are named. Each one gets its own folder with this name, "
-            "holding the .h5, the PNG and the CSV folder.\nUse 'Add' to insert fields, "
-            "including the quantities from the Experiment notes tab (e.g. {Temperature}). "
-            "{n} is a running number: 001, 002 …")
-        add = QtWidgets.QToolButton()
-        add.setText("Add ▾")
-        add.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.name_menu = QtWidgets.QMenu(add)
-        add.setMenu(self.name_menu)
-        self.name_menu.aboutToShow.connect(self._fill_name_menu)
-        row.addWidget(self.name_pat, 1)
-        row.addWidget(add)
-        f.addRow("File name", row)
-        self.name_preview = QtWidgets.QLabel()
-        self.name_preview.setWordWrap(True)
-        self.name_preview.setStyleSheet("color:gray")
-        f.addRow(self.name_preview)
-        self.name_pat.editTextChanged.connect(self._name_changed)
+        side_lay.insertWidget(0, g)
         self.sample.textChanged.connect(self._name_changed)
-        left.addWidget(g)
+        # file name of each kind of measurement: fixed start + details, optional extra
+        self.name_extra, self.name_prev = {}, {}
+        left.addWidget(self._name_box("map"))
 
         row = QtWidgets.QHBoxLayout()
         self.start_btn = QtWidgets.QPushButton("Start scan")
@@ -899,10 +884,13 @@ class MainWindow(QtWidgets.QMainWindow):
                                  "While the laser power is being set before a scan, this "
                                  "aborts the power setting (the sine stays where it is).")
         self.stop_btn.setEnabled(False)
-        self.discard_btn = QtWidgets.QPushButton("Stop && discard")
-        self.discard_btn.setToolTip("Stop and delete this scan (nothing is saved)")
+        self.discard_btn = _DoubleClickButton("Stop && discard")
+        self.discard_btn.setToolTip("Double-click: stop and delete this measurement "
+                                    "(nothing is saved)")
         self.discard_btn.setEnabled(False)
-        self.discard_btn.clicked.connect(self.stop_discard)
+        self.discard_btn.doubleClicked.connect(self.stop_discard)
+        self.discard_btn.clicked.connect(lambda: self.statusBar().showMessage(
+            "Double-click 'Stop & discard' to stop and delete this measurement."))
         self.start_btn.clicked.connect(self.start)
         self.stop_btn.clicked.connect(self.stop)
         row.addWidget(self.start_btn, 2)
@@ -1096,6 +1084,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self.pm_set.toggled.connect(self._name_changed)
             self.pm_target.valueChanged.connect(self._name_changed)
         self.folder.textChanged.connect(self._name_changed)
+        for lay_, kind_ in self._late_name_boxes:   # before each tab's final stretch
+            lay_.insertWidget(max(lay_.count() - 1, 0), self._name_box(kind_))
+        self.side_tabs.currentChanged.connect(self._name_changed)
+        self._name_timer = QtCore.QTimer(self)      # keeps the time in the preview right
+        self._name_timer.setInterval(5000)
+        self._name_timer.timeout.connect(self._name_changed)
+        self._name_timer.start()
         QtCore.QTimer.singleShot(400, self._name_changed)
         QtCore.QTimer.singleShot(300, self._start_here_on_launch)
         self._init_preview()
@@ -3510,14 +3505,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def stop_discard(self):
         if not self.worker:
             return
-        if QtWidgets.QMessageBox.question(
-                self, "SPCM", "Stop and delete this scan?\nNothing of it will be saved.") \
-                != QtWidgets.QMessageBox.StandardButton.Yes:
-            return
-        if not self.worker:      # it finished (and was saved) while the question was open
-            self.statusBar().showMessage("It had already finished and is saved.")
-            return
-        self._discard = True
+        self._discard = True     # double-click on the button: no question
         self.worker.stop()
         self.statusBar().showMessage("Stopping, the scan will be discarded…")
 
@@ -3557,68 +3545,67 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs.setCurrentWidget(self.plot_stack)
 
     # -- measurement names --
-    def _fill_name_menu(self):
-        import naming
-        m = self.name_menu
+    # -- measurement names (1.2.15): date_time_sample_wavelength_type_details[_extra] --
+    NAME_NOTES = {
+        "map": "Name: date_time_sample_wavelength_map_size_step_power (+ bias when used; a "
+               "series: the range, each map's PNG / CSV its own value).",
+        "line": "Name: date_time_sample_wavelength_line_length_step_power (+ bias when "
+                "used); a series: line_bias_<range> or line_power_<range> after 'line'.",
+        "point": "Name: date_time_sample_wavelength_point_ + what is swept: point_power "
+                 "(power sweep), point_bias (bias sweep, at the power now), "
+                 "point_biaspower (bias × power), then the range(s).",
+        "iv": "Name: date_time_sample_IV_biasrange (+ R12.3kOhm with the fit ticked; "
+              "the folder is renamed when the fit is done)."}
+
+    def _name_box(self, kind):
+        """'File name' group of a tab: the next name (grey) and an optional part from the
+        Experiment notes that goes at the end."""
+        g = QtWidgets.QGroupBox("File name")
+        v = QtWidgets.QVBoxLayout(g)
+        prev = QtWidgets.QLabel()
+        prev.setWordWrap(True)
+        prev.setStyleSheet("color:gray")
+        prev.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        v.addWidget(prev)
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(QtWidgets.QLabel("Add at the end"))
+        ed = QtWidgets.QLineEdit((self.config.get("naming", {}) or {}).get(kind, ""))
+        ed.setPlaceholderText("optional, e.g. {Temperature}")
+        ed.setToolTip("Optional: values from the Experiment notes tab, added at the end of "
+                      "the name. Use 'Add' to pick them; leave empty for none.")
+        ed.textChanged.connect(lambda t, k=kind: (self._save_setting("naming", k, t),
+                                                  self._name_changed()))
+        row.addWidget(ed, 1)
+        add = QtWidgets.QToolButton()
+        add.setText("Add ▾")
+        add.setPopupMode(QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QtWidgets.QMenu(add)
+        add.setMenu(menu)
+        menu.aboutToShow.connect(lambda m=menu, e=ed: self._fill_name_menu(m, e))
+        row.addWidget(add)
+        row.addWidget(self._help_btn("File name", self.NAME_NOTES[kind] + "\n\nThe start "
+                                     "(date_time_sample_wavelength_type) is always the same, "
+                                     "so sorting by name gives the order in which you "
+                                     "measured. Bias appears only when used. The wavelength "
+                                     "comes from the power meter (none without it, none for "
+                                     "the I–V). Two measurements in the same minute: _2."))
+        v.addLayout(row)
+        self.name_extra[kind], self.name_prev[kind] = ed, prev
+        return g
+
+    def _fill_name_menu(self, m, ed):
         m.clear()
-        for key, label in naming.FIELDS:
-            m.addAction(f"{label}   {{{key}}}", lambda k=key: self._insert_field(k))
         exp = [k for k, _ in self.experiment_fields()]
-        if exp:
-            m.addSection("From the Experiment notes")
-            for k in exp:
-                m.addAction(f"{k}   {{{k}}}", lambda k=k: self._insert_field(k))
+        if not exp:
+            a = m.addAction("(no fields in the Experiment notes tab)")
+            a.setEnabled(False)
+        for k in exp:
+            m.addAction(k, lambda k=k: self._insert_field(ed, k))
 
-    def _insert_field(self, key):
-        e = self.name_pat.lineEdit()
-        t, pos = e.text(), e.cursorPosition()
-        ins = "{" + key + "}"
-        if pos > 0 and t[pos - 1] not in "_-":
-            ins = "_" + ins
-        e.setText(t[:pos] + ins + t[pos:])
-        e.setCursorPosition(pos + len(ins))
-
-    def _name_values(self, kind, s=None):
-        """Values for the {fields} of the file name, for a map ('map'), a line
-        scan ('line') or a point sweep ('power', 'bias', 'bias_power')."""
-        import naming
-        v = {"sample": self.sample.text() or "sample",
-             "date": time.strftime("%Y%m%d"), "time": time.strftime("%H%M"),
-             "type": {"map": "map", "line": "line"}.get(kind, kind.replace("_", "") + "sweep")}
-        v.update({k: val for k, val in self.experiment_fields()})
-        if kind == "iv":
-            v["type"] = "IV"
-            if getattr(s, "fit", False):
-                import iv
-                v["R"] = iv.R_FIELD_MARK      # replaced by the fitted R afterwards
-            if s is not None:
-                v["bias"] = naming.range_text([s.v_min, s.v_max], "V")
-            v["power"] = self._power_now_text()
-            return v
-        try:
-            s = s or (self.settings() if kind in ("map", "line") else None)
-        except Exception:
-            s = None
-        if kind == "map" and s is not None:
-            v["size"] = f"{naming.num(s.x_size, '')}x{naming.num(s.y_size, 'um')}"
-            v["step"] = naming.num(s.step * 1000, "nm")
-            v["mode"] = s.mode
-        elif kind == "line" and s is not None:
-            v["size"] = naming.num(s.x_size, "um")
-            v["step"] = naming.num(s.step * 1000, "nm")
-            v["mode"] = "step"
-        if s is not None:
-            v["bias"] = naming.range_text([x for x in s.biases if x is not None], "V")
-        if kind in ("power", "bias_power") and s is not None:
-            v["power"] = naming.range_text(list(s.powers_uW), "uW")
-        elif kind == "bias":
-            v["power"] = self._power_now_text()
-        elif s is not None and getattr(s, "outer", "bias") == "power":   # power series
-            v["power"] = naming.range_text(list(s.outer_values), "uW")
-        else:              # maps and lines: the set power, or what the meter reads now
-            tgt = getattr(s, "target_power_uW", None) if s is not None else None
-            v["power"] = naming.num(tgt, "uW") if tgt else self._power_now_text()
-        return v
+    @staticmethod
+    def _insert_field(ed, key):
+        t = ed.text().strip()
+        ed.setText((t + "_" if t else "") + "{" + key + "}")
 
     def _power_now_text(self):
         import naming
@@ -3627,25 +3614,113 @@ class MainWindow(QtWidgets.QMainWindow):
             return ""
         return naming.num(p / (self.pm.sample_factor or 1.0) * 1e6, "uW")
 
-    def measurement_name(self, kind, s=None):
+    def _name_parts(self, kind, s):
+        """-> (details, per-map details or None) for a measurement of this kind.
+        kind: 'map', 'line', 'iv', or a point-sweep kind ('power', 'bias', 'bias_power')."""
         import naming
-        pat = self.name_pat.currentText().strip() or naming.DEFAULT_PATTERN
-        self._save_setting("scan_defaults", "file_pattern", pat)
-        pat = naming.pattern_for(pat, kind)
-        if kind == "iv" and getattr(s, "fit", False) and "{r}" not in pat.lower():
-            # fit ticked: the resistance always goes into the name (before the number)
-            pat = pat.replace("{n}", "{R}_{n}", 1) if "{n}" in pat else pat + "_{R}"
-        return naming.make_name(pat, self._name_values(kind, s),
-                                self.folder.text() or "data")
+        num, rng = naming.num, naming.range_text
+        if kind == "iv":
+            return [rng([s.v_min, s.v_max], "V"),
+                    __import__("iv").R_FIELD_MARK if getattr(s, "fit", False) else ""], None
+        if kind in ("power", "bias", "bias_power"):
+            if s.finest:
+                prange = rng([s.p_from_uW, s.p_to_uW], "uW")
+            else:
+                prange = rng(list(s.powers_uW), "uW")
+            brange = rng([b for b in s.biases if b is not None], "V")
+            if kind == "power":
+                return ["power", prange], None
+            if kind == "bias":
+                return ["bias", brange, self._power_now_text()], None
+            return ["biaspower", brange, prange], None
+        outer = getattr(s, "outer", "bias")
+        biases = [b for b in s.biases if b is not None]
+        tgt = getattr(s, "target_power_uW", None)
+        power = num(tgt, "uW") if tgt else self._power_now_text()
+        step = num(s.step * 1000, "nm")
+        if kind == "line":
+            length = num(s.x_size, "um")
+            if outer == "power" and len(s.outer_values) > 0:
+                return ["power", rng(list(s.outer_values), "uW"), length, step], None
+            if len(biases) > 1:
+                return ["bias", rng(biases, "V"), length, step, power], None
+            bias = naming.signed(biases[0]) if biases and biases[0] != 0 else ""
+            return [length, step, power, bias], None
+        size = f"{num(s.x_size, '')}x{num(s.y_size, 'um')}"
+        if outer == "power" and len(s.outer_values) > 0:
+            vals = list(s.outer_values)
+            per = [[size, step, num(v, "uW")] for v in vals]
+            return [size, step, rng(vals, "uW")], (per if len(vals) > 1 else None)
+        if len(biases) > 1:
+            per = [[size, step, power, naming.signed(b)] for b in s.biases]
+            return [size, step, power, rng(biases, "V")], per
+        bias = naming.signed(biases[0]) if biases and biases[0] != 0 else ""
+        return [size, step, power, bias], None
+
+    def _make_name(self, kind, s, when=None):
+        """-> (name, per-map names or None) without checking the folder."""
+        import naming
+        tab = {"power": "point", "bias": "point", "bias_power": "point"}.get(kind, kind)
+        wl = getattr(self.pm, "wavelength_nm", None) if self.pm is not None else None
+        head = naming.head(self.sample.text() or "sample", wl, tab, when)
+        details, per = self._name_parts(kind, s)
+        vals = {k: v for k, v in self.experiment_fields()}
+        extra = naming.fill_extra(self.name_extra[tab].text(), vals) if tab in \
+            self.name_extra else ""
+        name = naming.compose(head, details, extra)
+        maps = [naming.compose(head, p, extra) for p in per] if per else None
+        return name, maps
+
+    def measurement_name(self, kind, s=None):
+        """The name of a new measurement (folder and files). For maps (and lines) the
+        name, and for a map series each map's own name, are stored in the settings."""
+        import naming
+        name, maps = self._make_name(kind, s)
+        final = naming.unique(self.folder.text() or "data", name)
+        if s is not None and hasattr(s, "map_names"):
+            s.file_name = final
+            if maps:
+                sfx = final[len(name):]               # '_2' if the name was taken
+                s.map_names = [m + sfx for m in maps]
+            else:
+                s.map_names = [final]
+        return final
 
     def _name_changed(self, *_):
-        try:
-            import naming
-            pat = self.name_pat.currentText().strip() or naming.DEFAULT_PATTERN
-            name = naming.make_name(pat, self._name_values("map"), self.folder.text() or "data")
-            self.name_preview.setText(f"next map: {name}")
-        except Exception:
-            self.name_preview.setText("")
+        """Grey preview of the next name in each tab."""
+        import naming
+        if not getattr(self, "name_prev", None):
+            return
+        makers = {"map": lambda: self.settings(),
+                  "line": lambda: self._line_preview_settings(),
+                  "point": lambda: self._sweep_settings(),
+                  "iv": lambda: self._iv_settings()}
+        for tab, lab in self.name_prev.items():
+            try:
+                s = makers[tab]()
+                kind = s.kind if tab == "point" else tab
+                name, _ = self._make_name(kind, s)
+                name = naming.unique(self.folder.text() or "data", name)
+                warn = (f"<br><span style='color:#c62828'>{len(name)} characters: long "
+                        "names can hit the Windows path limit</span>"
+                        if len(name) > naming.MAX_GOOD_LENGTH else "")
+                lab.setText(f"next: {name}{warn}")
+            except Exception:
+                lab.setText("next: – (fill in the values first)")
+
+    def _line_preview_settings(self):
+        """Settings of the Line tab without starting (for the name preview)."""
+        import linescan
+        a = self.to_stage(self.ln_x0.value(), self.ln_y0.value())
+        b = self.to_stage(self.ln_x1.value(), self.ln_y1.value())
+        base = self.settings(series=False)
+        outer, values = self._line_series()
+        return linescan.line_settings(
+            a, b, self.ln_step.value() / 1000,
+            biases=None if values == [None] else (values if outer == "bias" else None),
+            outer=outer, values=values if outer == "power" else None,
+            origin=self.origin_xy, flips=(self.sx < 0, self.sy < 0),
+            target_power_uW=base.target_power_uW)
 
     def _delete_scan_files(self, path):
         import glob

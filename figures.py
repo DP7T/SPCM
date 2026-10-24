@@ -141,12 +141,11 @@ def save_figure(d, ib, path, channel=0, refl_channel=2, limits=None,
 
 def save_all(d):
     """One PNG per map next to the .h5 file: <name>_map0.png, ..."""
-    base = os.path.splitext(d.path)[0]
     out = []
-    from scanner import outer_tag
+    from scanner import map_bases
+    bases = map_bases(d)                 # each map's own name (or <name>_map<k>_<value>)
     for ib, b in enumerate(d.settings.outer_list()):
         if not np.isfinite(d.pc[ib, :, :, 0]).any():
             continue
-        suffix = f"_map{ib}" + outer_tag(d.settings, b)
-        out.append(save_figure(d, ib, base + suffix + ".png"))
+        out.append(save_figure(d, ib, bases[ib] + ".png"))
     return out

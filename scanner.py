@@ -111,6 +111,9 @@ class ScanSettings:
     auto_range: bool = False       # photocurrent lock-in: next range up above AUTO_RANGE_FRAC
     n_avg: int = 1                 # readings per point (line scans), ~1 tau apart; 1 = like a map
     where_map: str = ""            # line scans: the map the line was marked on (_where.png)
+    file_name: str = ""            # the measurement's name (1.2.15 names) ...
+    map_names: list = field(default_factory=list)   # ... and each map's own name (series:
+                                   # the range swapped for that map's value) for PNG / CSV
     biases: list = field(default_factory=lambda: [None])  # None = don't touch bias
     sample: str = "sample"
     notes: str = ""
@@ -181,6 +184,22 @@ def outer_name(s):
 def outer_text(s, v):
     """'0.5 V', '20 µW', or '' for a single map."""
     return "" if v is None else f"{v:g} {outer_name(s)[1]}"
+
+
+def map_bases(d):
+    """Path without extension for each map's own PNG and CSV folder.
+    1.2.15 names: <folder>/<map name> (a series: the range swapped for the map's value;
+    a phase-corrected copy adds _phased). Older files: <name>_map<k>_<value>."""
+    s = d.settings
+    vals = s.outer_list()
+    base = os.path.splitext(d.path)[0]
+    names = list(getattr(s, "map_names", None) or [])
+    fname = getattr(s, "file_name", "") or ""
+    if names and len(names) == len(vals) and fname:
+        stem = os.path.basename(base)
+        suffix = stem[len(fname):] if stem.startswith(fname) else ""
+        return [os.path.join(os.path.dirname(base), n + suffix) for n in names]
+    return [base + f"_map{ib}" + outer_tag(s, b) for ib, b in enumerate(vals)]
 
 
 def outer_tag(s, v):
@@ -465,8 +484,10 @@ def export_csv(d):
     Each CSV is a matrix: first row = x (µm), first column = y (µm).
     Photocurrent is converted (same as the map); reflection is as read."""
     base = os.path.splitext(d.path)[0]
+    new_names = bool(getattr(d.settings, "map_names", None))
     out = base + "_csv"
-    os.makedirs(out, exist_ok=True)
+    if not new_names:
+        os.makedirs(out, exist_ok=True)
     fac, unit, formula = pc_scale(d.settings)
     unit = unit or getattr(d.settings, "lockin_unit", "V")
     st = d.settings
@@ -475,8 +496,13 @@ def export_csv(d):
     ux = (-1 if getattr(st, "flip_x", False) else 1) * (np.asarray(d.xs) - ox) + 0.0
     vy = (-1 if getattr(st, "flip_y", False) else 1) * (np.asarray(d.ys) - oy) + 0.0
     ix, iy = np.argsort(ux), np.argsort(vy)
+    subs = []
     for ib, b in enumerate(d.settings.outer_list()):
-        sub = os.path.join(out, f"map{ib}" + outer_tag(d.settings, b))
+        if new_names:                    # 1.2.15: <map name>_csv/ next to the .h5
+            sub = map_bases(d)[ib] + "_csv"
+        else:
+            sub = os.path.join(out, f"map{ib}" + outer_tag(d.settings, b))
+        subs.append(sub)
         os.makedirs(sub, exist_ok=True)
         for name, arr, f_, u in (("photocurrent", d.pc, fac, unit),
                                  ("reflection", d.refl, 1.0, "V")):
@@ -487,45 +513,46 @@ def export_csv(d):
                     for r in range(m.shape[0]):     # numbers only (axes: info.txt)
                         fh.write(",".join("" if not np.isfinite(v) else f"{v:.6e}"
                                           for v in m[r]) + "\n")
-    with open(os.path.join(out, "info.txt"), "w", encoding="utf-8") as fh:
-        s = d.settings
-        fh.write(f"Sample: {s.sample}\nStarted: {d.started}\nCompleted: {d.completed}\n")
-        fh.write(f"Photocurrent conversion: {formula} [{unit}]\n")
-        ph = getattr(d, "phase", None)
-        if ph:
-            fh.write(f"PHASE-CORRECTED COPY of {ph.get('source_file', '')}: photocurrent X, Y, "
-                     f"theta rotated by {ph.get('phase_deg', 0):.2f}° (X' = X cos + Y sin), "
-                     f"background subtracted: {ph.get('offset', [0, 0])} {ph.get('offset_unit', '')}"
-                     f"\n  {ph.get('message', '')}\n")
-        fh.write("\nCSV files: plain matrices of numbers. Row = y, column = x, first row "
-                 "= lowest y (as on screen). Photocurrent in "
-                 f"{unit}, reflection in V, theta in degrees.\n")
-        fh.write(f"x (µm, from the origin), one value per column: "
-                 + ", ".join(f"{x:.4f}" for x in ux[ix]) + "\n")
-        fh.write(f"y (µm, from the origin), one value per row: "
-                 + ", ".join(f"{y:.4f}" for y in vy[iy]) + "\n")
-        fh.write(f"Origin (0, 0) = stage ({ox:.3f}, {oy:.3f}) µm\n\n")
-        fh.write("Experiment:\n")
-        for k, v in (s.conditions or {}).items():
-            fh.write(f"  {k}: {v}\n")
-        fh.write(f"\nNotes:\n{s.notes}\n\nScan settings:\n")
-        for k, v in asdict(s).items():
-            if k not in ("conditions", "notes"):
+    for tgt in (subs if new_names else [out]):     # every map folder gets the info
+        with open(os.path.join(tgt, "info.txt"), "w", encoding="utf-8") as fh:
+            s = d.settings
+            fh.write(f"Sample: {s.sample}\nStarted: {d.started}\nCompleted: {d.completed}\n")
+            fh.write(f"Photocurrent conversion: {formula} [{unit}]\n")
+            ph = getattr(d, "phase", None)
+            if ph:
+                fh.write(f"PHASE-CORRECTED COPY of {ph.get('source_file', '')}: photocurrent X, Y, "
+                         f"theta rotated by {ph.get('phase_deg', 0):.2f}° (X' = X cos + Y sin), "
+                         f"background subtracted: {ph.get('offset', [0, 0])} {ph.get('offset_unit', '')}"
+                         f"\n  {ph.get('message', '')}\n")
+            fh.write("\nCSV files: plain matrices of numbers. Row = y, column = x, first row "
+                     "= lowest y (as on screen). Photocurrent in "
+                     f"{unit}, reflection in V, theta in degrees.\n")
+            fh.write(f"x (µm, from the origin), one value per column: "
+                     + ", ".join(f"{x:.4f}" for x in ux[ix]) + "\n")
+            fh.write(f"y (µm, from the origin), one value per row: "
+                     + ", ".join(f"{y:.4f}" for y in vy[iy]) + "\n")
+            fh.write(f"Origin (0, 0) = stage ({ox:.3f}, {oy:.3f}) µm\n\n")
+            fh.write("Experiment:\n")
+            for k, v in (s.conditions or {}).items():
                 fh.write(f"  {k}: {v}\n")
-        fh.write("\nPer map (lock-in settings read from the front panels):\n")
-        for ib, mi in enumerate(d.map_info):
-            fh.write(f"  map{ib}: {json.dumps(mi)}\n")
-        for key, vals in sorted(d.accessories.items()):
-            if "powermeter" in key:
-                fh.write(f"  {key}: " + ", ".join(
-                    f"{k}={v:.4g}" if isinstance(v, float) else f"{k}={v}"
-                    for k, v in vals.items() if k != "time") + "\n")
-        fh.write(f"\nInstruments: {json.dumps(d.hw_info)}\n")
-    if d.power_log:
-        np.savetxt(os.path.join(out, "power_log.csv"),
-                   np.array(d.power_log, float)[:, [2, 5]], delimiter=",",
-                   header="time_s,power_on_sample_uW", comments="")
-    return out
+            fh.write(f"\nNotes:\n{s.notes}\n\nScan settings:\n")
+            for k, v in asdict(s).items():
+                if k not in ("conditions", "notes"):
+                    fh.write(f"  {k}: {v}\n")
+            fh.write("\nPer map (lock-in settings read from the front panels):\n")
+            for ib, mi in enumerate(d.map_info):
+                fh.write(f"  map{ib}: {json.dumps(mi)}\n")
+            for key, vals in sorted(d.accessories.items()):
+                if "powermeter" in key:
+                    fh.write(f"  {key}: " + ", ".join(
+                        f"{k}={v:.4g}" if isinstance(v, float) else f"{k}={v}"
+                        for k, v in vals.items() if k != "time") + "\n")
+            fh.write(f"\nInstruments: {json.dumps(d.hw_info)}\n")
+        if d.power_log:
+            np.savetxt(os.path.join(tgt, "power_log.csv"),
+                       np.array(d.power_log, float)[:, [2, 5]], delimiter=",",
+                       header="time_s,power_on_sample_uW", comments="")
+    return subs[0] if new_names else out
 
 
 def _settings_from(st):

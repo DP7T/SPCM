@@ -68,16 +68,25 @@ def run_worker(w):
 def _():
     import naming
     import tempfile
-    v = dict(sample="flake A", date="20261015", size="20x20um", step="500nm",
-             power="10uW", type="line", Temperature="4.2 K")
     t = tempfile.mkdtemp()
-    assert naming.make_name(naming.DEFAULT_PATTERN, v, t) == \
-        "flake-A_20261015_20x20um_500nm_10uW_001"
-    os.makedirs(os.path.join(t, "flake-A_20261015_20x20um_500nm_10uW_001"))
-    assert naming.make_name(naming.DEFAULT_PATTERN, v, t).endswith("_002")
-    assert naming.make_name(naming.pattern_for(naming.DEFAULT_PATTERN, "line"), v, t) \
-        == "flake-A_20261015_20x20um_500nm_10uW_line_001"
-    assert naming.make_name("{sample}_{temperature}", v, t) == "flake-A_4.2-K"
+    when = time.mktime((2026, 10, 24, 14, 32, 0, 0, 0, -1))
+    head = naming.head("flake A", 532.0, "map", when)
+    n = naming.compose(head, ["20x20um", "500nm", "10uW", ""], "")
+    assert n == "20261024_1432_flake-A_532nm_map_20x20um_500nm_10uW", n
+    assert naming.compose(naming.head("s", 532, "iv", when), ["-1to1V", ""]) == \
+        "20261024_1432_s_IV_-1to1V", "the I-V has no wavelength"
+    assert naming.compose(naming.head("s", None, "line", when), ["12um"]) == \
+        "20261024_1432_s_line_12um", "no power meter: no wavelength"
+    assert naming.signed(0.5) == "+0.5V" and naming.signed(-1) == "-1V"
+    assert naming.range_text([-1, -0.5, 0, 0.5, 1], "V") == "-1to1V"
+    os.makedirs(os.path.join(t, n))
+    assert naming.unique(t, n) == n + "_2", "same minute: _2"
+    assert naming.fill_extra("{temperature}", {"Temperature": "4.2 K"}) == "4.2-K"
+    assert naming.fill_extra("", {"Temperature": "4.2 K"}) == ""
+    # sorting by name = time order, whatever the type
+    names = [naming.compose(naming.head("s", 532, k, when + 60 * i), ["x"])
+             for i, k in enumerate(["map", "line", "point", "iv", "map"])]
+    assert sorted(names) == names, names
 
 
 @check("laser power: monotonic 2 mV steps, abort")
@@ -690,12 +699,33 @@ if HAVE_QT:
             w.tabs.setCurrentWidget(w.cam_tab)
             pump(0.5)
             shot("camera")
-        # the Save box: file-name pattern and preview
+        # file name: fixed start, each tab its own (preview), map series per-map names
         w.side_tabs.setCurrentIndex(0)
-        w.side_tabs.widget(0).ensureWidgetVisible(w.name_pat)
+        w._name_changed()
+        w.side_tabs.widget(0).ensureWidgetVisible(w.name_prev["map"])
         shot("save_box")
-        assert w.name_preview.text().startswith("next map:"), w.name_preview.text()
-        print("      " + w.name_preview.text())
+        import re as _re
+        pv = w.name_prev["map"].text()
+        assert _re.match(r"next: \d{8}_\d{4}_sample_532nm_map_12x8um_1000nm_", pv), pv
+        print("      " + pv)
+        mp = os.path.basename(w.data.path)
+        assert _re.match(r"\d{8}_\d{4}_sample_532nm_map_12x8um_1000nm_", mp), mp
+        assert os.path.exists(os.path.splitext(w.data.path)[0] + ".png"), "map PNG name"
+        assert os.path.isdir(os.path.splitext(w.data.path)[0] + "_csv"), "map CSV folder"
+        amp0 = w.amp_mode.currentIndex()
+        w.amp_mode.setCurrentIndex(w.amp_mode.findData("sr570"))
+        w.ser_kind.setCurrentIndex(w.ser_kind.findData("bias"))
+        w.ser_vals.setText("-1, -0.5, 0, 0.5, 1")
+        st_ = w.settings()
+        nm_, per_ = w._make_name("map", st_)
+        assert nm_.endswith("_-1to1V") and per_ and per_[1].endswith("_-0.5V") and \
+            "-1to1V" not in per_[1], (nm_, per_)
+        print(f"      bias series: {nm_} -> map 2: {per_[1]}")
+        w.ser_kind.setCurrentIndex(0)
+        w.ser_vals.setText("")
+        w.amp_mode.setCurrentIndex(amp0)
+        w.name_extra["map"].setText("{Temperature}")
+        w.name_extra["map"].setText("")
         # fine map across an electrode edge, then "Measure resolution"
         w.set_origin(0.0, 0.0)
         w.xc.setValue(1)
@@ -870,8 +900,6 @@ if HAVE_QT:
         w.iv_cycles.setValue(2)
         w.iv_wait.setValue(0)
         w.iv_fit.setChecked(True)
-        pat0 = w.name_pat.currentText()
-        w.name_pat.setEditText("{sample}_{type}_{R}_{n}")
         shot("iv_tab")
         w.start()
         t0 = time.time()
@@ -884,12 +912,7 @@ if HAVE_QT:
         assert os.path.exists(os.path.splitext(w.iv_data.path)[0] + ".png"), "figure not renamed"
         print("      I-V with fit, name: " + ivn)
         shot("iv")
-        # fit ticked, pattern WITHOUT {R}: R still goes into the name
-        w.name_pat.setEditText("{sample}_{n}")
-        nm = w.measurement_name("iv", w._iv_settings())
-        assert "RFIT" in nm, nm
-        print("      fit ticked, pattern without {R}: " + nm + " (RFIT = R after the fit)")
-        w.name_pat.setEditText(pat0)
+        assert "_IV_-0.5to0.5V_R" in ivn and "nm_" not in ivn, ivn
         w.iv_fit.setChecked(False)
         assert "RFIT" not in w.measurement_name("iv", w._iv_settings()), "R without fit"
         w._toggle_dark(True)                      # the I-V plot follows the theme

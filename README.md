@@ -60,7 +60,7 @@ The left side has two tabs:
 - **Scan**: scan area, focus, timing, bias and save.
 - **Instruments**: photocurrent amplifier, lock-in readout and laser power.
 
-**Start/Stop** and the progress bar are always visible underneath. The laser power on the sample is also always shown in the status bar at the bottom right. **View → Dark theme** switches between light and dark.
+**Start/Stop** and the progress bar are always visible underneath. **Stop & save** stops and keeps what was measured; **Stop & discard** needs a **double-click** (no question pops up) and deletes the measurement. The laser power on the sample is also always shown in the status bar at the bottom right. **View → Dark theme** switches between light and dark.
 
 - **Number fields** show their unit in the label: position and size in **µm**, step in **nm**, waits in **ms**. A plain number is in that unit, so `300` as the step means 300 nm. `k` multiplies by 1000, so `1k` as the step means 1000 nm = 1 µm. `u`/`µ`, `n` and `m` are absolute, so `1u` as the step means 1 µm, and `500n` as the size means 0.5 µm. `1e-1`, `0.1` and a decimal comma (`0,1`) also work. Inside the bias list, commas separate the values.
 - **Plot scales** pick the unit prefix by themselves (… 100 nA → 1 µA …), and the colour Min/Max boxes show values like `-2.1 nA`.
@@ -185,7 +185,7 @@ The **I–V** tab (left) measures the DC current against the bias from the SR570
 - **Sensitivity**: the SR570 front-panel sensitivity. The current is AUX IN voltage × sensitivity, so this must match the front panel.
 - **Sign:** if a positive bias gives a negative current, use the SR570's own **INVERT** button.
 - **Fit a straight line (resistance R)** (tick box, off by default, remembered): fits I = V/R + I0 through every point of the sweep, all cycles together. The fit line and R ± its error are shown on the live plot and in the PNG; R, I0 and r² (how straight: 1 = perfectly) go into the h5 (`fit` group) and info.txt.
-  - **R in the file name:** with the tick box on, R always goes into the name, before the number (or where you put `{R}` in the file-name pattern, field menu "Resistance from the I–V fit"). The name is fixed before the sweep, so the folder and its files are renamed when the fit is done, e.g. `sample_IV_R12.3kOhm_001`. Written as "Ohm", not "Ω", so every program can open it.
+  - **R in the file name:** with the tick box on, R goes at the end of the name. The name is fixed before the sweep, so the folder and its files are renamed when the fit is done, e.g. `20261024_1720_flakeA_IV_-1to1V_R12.3kOhm`. Written as "Ohm", not "Ω", so every program can open it.
 
 Press **Start I–V**, the Start button on this tab. The **Plot** tab on the right shows the curve live, one colour per cycle.
 
@@ -295,15 +295,32 @@ In the window:
 
 ## Opening your data
 
-**Every measurement gets its own folder** inside the save folder, named like the measurement. By default the name is
+**Every measurement gets its own folder** inside the save folder, named like the measurement. The names are made by the program (1.2.15):
 
-`sample_date_size_step_power_number`, for example `flakeA_20261015_20x20um_500nm_10uW_001`
+`date_time_sample_wavelength_type_details`
 
-- **File name** (Save box): pick another pattern from the list or type your own. **Add ▾** inserts fields: sample, date, time, size, step, power on the sample, bias, scan mode, type and the running number `{n}`. It also offers every quantity from the **Experiment notes** tab, such as `{Temperature}` or `{Polarization}`. The grey line under it shows the next name.
-- The power in the name is the target power if *Set the laser power before each scan* is ticked, otherwise what the meter reads at the start. `{n}` counts up (001, 002 …) so a name is never used twice.
+- The **start is always the same**: date, start time (`HHMM`), sample, wavelength, then `map`, `line`, `point` or `IV`. So **sorting by name gives the order you measured in**, whatever the type, even after copying or uploading. Two measurements started in the same minute: the second gets `_2`.
+- The **wavelength** is read from the power meter's settings (none without the power meter, none for the I–V).
+- **Details** depend on the type:
+
+| Type | Example |
+|---|---|
+| map | `20261024_1432_flakeA_532nm_map_20x20um_500nm_10uW` |
+| map at +0.5 V | `…_map_20x20um_500nm_10uW_+0.5V` |
+| map bias series | folder `…_map_20x20um_500nm_10uW_-1to1V`; each map's PNG / CSV `…_10uW_-0.5V` |
+| map power series | folder `…_map_20x20um_500nm_1to20uW`; each map `…_500nm_5uW` |
+| line | `20261024_1610_flakeA_532nm_line_12um_200nm_10uW` (+ `_+0.5V` with bias) |
+| line series | `…_line_bias_-1to1V_12um_200nm_10uW` / `…_line_power_1to20uW_12um_200nm` |
+| point sweep | `…_point_power_1to20uW` / `…_point_bias_-1to1V_10uW` / `…_point_biaspower_-1to1V_1to20uW` |
+| I–V | `20261024_1720_flakeA_IV_-1to1V` (+ `_R12.3kOhm` with the fit) |
+
+- The **power** is the target power if *Set the laser power before each scan* is ticked, otherwise what the meter reads at the start. The **bias** appears only when one is used.
+- **Add at the end** (each tab's *File name* box): optional values from the **Experiment notes** tab, e.g. `{Temperature}` → `…_77K`. Empty by default; nothing from the notes is added by itself.
+- The grey line in each tab shows the next name; it turns red above 80 characters (very long names can hit the Windows path limit).
+- **Sample** and **Folder** are at the top, above the tabs, the same for every measurement.
 
 Inside each measurement folder:
-- **`<name>_map0.png`**: a ready-made figure for each map. On the left is the photocurrent or photovoltage map (blue–white–red, symmetric around zero, with a colour bar in nA, µV, etc.); on the right is the reflection map in grey. The title follows your setup: **Photocurrent** with the SR570, **Photovoltage** with the SR560, and with the lock-in alone it depends on its input (current input → photocurrent, A or A−B → photovoltage). **File → Save figure of shown map…** saves the map currently shown as PNG, PDF or SVG. It uses your Manual colour limits if you set them.
+- **`<name>.png`** (a series: one PNG per map, named with that map's bias / power): a ready-made figure for each map. On the left is the photocurrent or photovoltage map (blue–white–red, symmetric around zero, with a colour bar in nA, µV, etc.); on the right is the reflection map in grey. The title follows your setup: **Photocurrent** with the SR570, **Photovoltage** with the SR560, and with the lock-in alone it depends on its input (current input → photocurrent, A or A−B → photovoltage). **File → Save figure of shown map…** saves the map currently shown as PNG, PDF or SVG. It uses your Manual colour limits if you set them.
 - **`<name>.h5`**: everything in one file (all maps, raw and converted, settings, notes, power log). Open it with:
   - SPCM itself: **File → Open saved scan…**
   - **Origin**: *Data → Import → HDF5*.

@@ -337,7 +337,11 @@ def save_check_figures(d, res, copy_path_):
             a2.set_title(ttl + ("" if b is None else f"  ({b:g} {outer_name_unit(st)})"),
                          fontsize=10)
             fig.tight_layout()
-            path = f"{base}_{kind}{tag}.png"
+            if getattr(st, "map_names", None) and len(vals) > 1:     # 1.2.15 names
+                from scanner import map_bases
+                path = f"{map_bases(d)[ib]}_phased_{kind}.png"
+            else:
+                path = f"{base}_{kind}{tag}.png"
             fig.savefig(path, dpi=150, facecolor="white")
             plt.close(fig)
             out.append(path)

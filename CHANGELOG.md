@@ -1,6 +1,21 @@
 # Changelog
 
-## 1.2.14 (in testing)
+## 1.2.15 (in testing)
+- **New file names, made by the program:** `date_time_sample_wavelength_type_details`,
+  e.g. `20261024_1432_flakeA_532nm_map_20x20um_500nm_10uW`. Sorting by name now gives
+  the order you measured in, for every type (map, line, point, IV). Wavelength from the
+  power meter (not for the I–V); bias only when used; a series shows its range, and each
+  map of a map series gets its own PNG / CSV named with its own bias or power. Lines:
+  `line_bias_…` / `line_power_…`; point sweeps: `point_power_…` / `point_bias_…` /
+  `point_biaspower_…`; I–V: `IV_-1to1V` (+ `R12.3kOhm` with the fit). Two in the same
+  minute: `_2`. The running number and the pattern are gone
+- Each tab (Map, Line, Point sweep, I–V) has its own **File name** box: the next name,
+  and an optional part from the Experiment notes added at the end (e.g. `{Temperature}`)
+- **Sample** and **Folder** moved above the tabs (shared by all measurements)
+- **Stop & discard** works with a double-click, without a question
+- Old files keep their names and open as before
+
+## 1.2.14 (pre-release)
 - Quick I–V: with "Fit a straight line" ticked, the resistance now always goes into the
   file name (folder and files renamed after the fit, e.g. `sample_IV_R12.3kOhm_001`).
   Before, it only did with `{R}` in the file-name pattern; `{R}` still chooses where

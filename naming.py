@@ -121,3 +121,66 @@ def pattern_for(pattern, kind):
     if "{n}" in pattern:
         return pattern.replace("{n}", "{type}_{n}", 1)
     return pattern + "_{type}"
+
+
+# ---------------------------------------------------------------- names since 1.2.15
+# date_time_sample_wavelength_type_details[_extra]   (sorting by name = time order)
+TYPES = {"map": "map", "line": "line", "point": "point", "iv": "IV"}
+MAX_GOOD_LENGTH = 80          # warn above this (Windows: whole path <= ~260 characters)
+
+
+def signed(v, unit="V"):
+    """0.5 -> '+0.5V', -1 -> '-1V' (a single bias always with its sign)."""
+    v = float(v)
+    return f"{v:+.3g}{unit}"
+
+
+def wavelength_text(nm):
+    return "" if not nm else f"{float(nm):.0f}nm"
+
+
+def compose(*parts):
+    """Join the non-empty parts with '_' (each cleaned for file names)."""
+    out = []
+    for p in parts:
+        if p is None:
+            continue
+        for q in (p if isinstance(p, (list, tuple)) else [p]):
+            q = clean(q)
+            if q:
+                out.append(q)
+    return "_".join(out)
+
+
+def head(sample, wavelength_nm, kind, when=None):
+    """Fixed start: date_time_sample_wavelength_type (no wavelength for the I-V)."""
+    t = time.localtime(when) if when else time.localtime()
+    return [time.strftime("%Y%m%d", t), time.strftime("%H%M", t), sample or "sample",
+            "" if kind == "iv" else wavelength_text(wavelength_nm), TYPES.get(kind, kind)]
+
+
+def fill_extra(text, values):
+    """The optional part a tab adds: '{Temperature}_{Gate voltage}' -> '77K_10V'."""
+    if not text or not text.strip():
+        return ""
+    t = re.sub(r"\{([^{}]+)\}",
+               lambda m: next((clean(v) for k, v in values.items()
+                               if k.lower() == m.group(1).lower()), ""), text)
+    return re.sub(r"_{2,}", "_", clean(t)).strip("_-.")
+
+
+def unique(folder, name):
+    """name, or name_2, name_3 ... if a folder of that name exists already. A name
+    with the I-V marker RFIT counts as taken by any R... folder of the same start."""
+    def taken(n):
+        if "RFIT" in n:
+            import glob
+            return bool(glob.glob(os.path.join(glob.escape(folder),
+                                               glob.escape(n).replace("RFIT", "R*"))))
+        return os.path.exists(os.path.join(folder, n))
+    if not taken(name):
+        return name
+    k = 2
+    while taken(f"{name}_{k}"):
+        k += 1
+    return f"{name}_{k}"
