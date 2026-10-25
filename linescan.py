@@ -67,6 +67,15 @@ def signal(d, channel=0):
     return d.pc[:, 0, :, channel] * fac, unit
 
 
+def signal_std(d, channel=0):
+    """[bias, point] spread (std) of the averaged readings, converted; None if the line
+    was measured with one reading per point (or for theta)."""
+    if getattr(d, "pc_std", None) is None or channel == 3:
+        return None
+    fac = pc_scale(d.settings)[0]
+    return d.pc_std[:, 0, :, channel] * fac
+
+
 def export_csv(d):
     """<name>_csv/line.csv: numbers only, one row per point; columns: distance,
     x, y, then per line (bias / power) the photocurrent X, Y, R, theta and the
@@ -89,6 +98,11 @@ def export_csv(d):
             for c, ch in enumerate(CHANNELS):
                 cols.append(f"{name} {ch}{tag} ({uu if c < 3 else 'deg'})")
                 data.append(arr[ib, 0, :, c] * (k if c < 3 else 1.0))
+            sd = d.pc_std if name == "photocurrent" else d.refl_std
+            if sd is not None:                   # spread of the readings per point
+                for c, ch in enumerate(CHANNELS[:3]):
+                    cols.append(f"{name} {ch} std{tag} ({uu})")
+                    data.append(sd[ib, 0, :, c] * k)
     with open(os.path.join(out, "line.csv"), "w") as fh:
         for row in np.array(data).T:
             fh.write(",".join("" if not np.isfinite(x) else f"{x:.6e}" for x in row) + "\n")
@@ -105,7 +119,15 @@ def export_csv(d):
         fh.write(f"From ({u[0]:.3f}, {v[0]:.3f}) to ({u[-1]:.3f}, {v[-1]:.3f}) µm "
                  f"(from the origin), {dist[-1]:.3f} µm long, {len(dist)} points, "
                  f"step {s.step * 1000:.1f} nm\n")
+        if getattr(s, "where_map", ""):
+            fh.write(f"Line marked on the map: {s.where_map} (picture: _where.png)\n")
         fh.write(f"Photocurrent conversion: {formula} [{unit}]\n\n")
+        ph = getattr(d, "phase", None)
+        if ph:
+            fh.write(f"PHASE-CORRECTED COPY of {ph.get('source_file', '')}: photocurrent X, Y, "
+                     f"theta rotated by {ph.get('phase_deg', 0):.2f}° (X' = X cos + Y sin), "
+                     f"background subtracted: {ph.get('offset', [0, 0])} "
+                     f"{ph.get('offset_unit', '')}\n  {ph.get('message', '')}\n\n")
         fh.write("line.csv: numbers only, one row per point. Columns:\n")
         for i, c in enumerate(cols, 1):
             fh.write(f"  {i}: {c}\n")
@@ -163,10 +185,17 @@ def save_figure(d, path, channel=0, dpi=200):
     else:
         fig, (a1, a2) = plt.subplots(2, 1, figsize=(6.4, 5.6), sharex=True,
                                      gridspec_kw={"height_ratios": [2, 1]})
-    colors = plt.cm.viridis(np.linspace(0, 0.9, max(len(biases), 1)))
+    from figures import series_key
+    bv = np.array([np.nan if b is None else b for b in biases], float)
+    colors, sm = series_key(biases, log=bool(punit == "µW" and np.isfinite(bv).all()
+                                              and bv.min() > 0 and bv.max() / bv.min() > 10))
+    sd = signal_std(d, channel)
     for ib, b in enumerate(biases):
         a1.plot(dist, sig[ib] / scale, "o-", ms=3, lw=1.2, color=colors[ib],
                 label=None if b is None else f"{b:g} {punit}")
+        if sd is not None:                       # spread of the readings per point
+            a1.errorbar(dist, sig[ib] / scale, yerr=sd[ib] / scale, fmt="none",
+                        ecolor=colors[ib], elinewidth=0.8, capsize=1.5)
         a2.plot(dist, d.refl[ib, 0, :, 2] * 1e3, "-", lw=1, color=colors[ib])
     a1.axhline(0, color="0.6", lw=0.8)
     a1.set_ylabel(f"{kind} {ch} ({pre}{unit})")
@@ -176,8 +205,15 @@ def save_figure(d, path, channel=0, dpi=200):
     a2.set_xlabel("Distance along the line (µm)")
     plt.setp(a1.get_xticklabels(), visible=False)
     if multi:
-        a1.legend(fontsize=8, title=pname, title_fontsize=8, ncol=2 if len(biases) > 6
-                  else 1)
+        if sm is None:
+            a1.legend(fontsize=8, title=pname, title_fontsize=8)
+        else:                                   # many curves: colour bar, no legend
+            for a in (a1, a2):
+                p = a.get_position()
+                a.set_position([p.x0, p.y0, 0.355, p.height])
+            cb = fig.colorbar(sm, cax=fig.add_axes([0.432, 0.10, 0.011, 0.82]))
+            cb.set_label(f"{pname} ({punit})", fontsize=9)
+            cb.ax.tick_params(labelsize=8)
         bx = np.array(biases, float)
         order = np.argsort(bx)
         m = sig[order] / scale

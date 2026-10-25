@@ -57,7 +57,11 @@ class TangoStage:
     from appinfo import app_dir as _app_dir
     LOG = os.path.join(_app_dir(), "spcm_stage.log")
 
+    _quiet = False          # position polling for the live display is not logged
+
     def _log(self, line):
+        if self._quiet:
+            return
         try:
             if not hasattr(self, "_logf"):
                 if os.path.exists(self.LOG) and os.path.getsize(self.LOG) > 5e6:
@@ -94,8 +98,14 @@ class TangoStage:
         return vals
 
     # -- high level --
-    def position(self):
-        x, y = self._numbers(self.query("?pos"), 2, "?pos")
+    def position(self, quiet=False):
+        """quiet=True: not written to spcm_stage.log (the live position display asks
+        a few times per second; that would fill the log)."""
+        self._quiet = bool(quiet)
+        try:
+            x, y = self._numbers(self.query("?pos"), 2, "?pos")
+        finally:
+            self._quiet = False
         return x, y
 
     def is_moving(self):
@@ -201,8 +211,34 @@ SR830_SENS = [2e-9, 5e-9, 10e-9, 20e-9, 50e-9, 100e-9, 200e-9, 500e-9,
               1e-3, 2e-3, 5e-3, 10e-3, 20e-3, 50e-3, 100e-3, 200e-3, 500e-3, 1]
 
 
+import threading
+
+
+def _note(text):
+    """Append a line to spcm_error.log (program folder); never fails."""
+    try:
+        from appinfo import app_dir
+        with open(os.path.join(app_dir(), "spcm_error.log"), "a", encoding="utf-8") as fh:
+            fh.write(time.strftime("%Y-%m-%d %H:%M:%S ") + text + "\n")
+    except Exception:
+        pass
+
+# One lock for all lock-ins: they share the GPIB bus, and two programs threads talking
+# on it at the same time can mix the replies of the two lock-ins (seen in the lab:
+# "-38.370.000156404" = the end of one lock-in's reply + the start of the other's).
+_BUS_LOCK = threading.RLock()
+
+
 class SR830:
     """SR830 via PyVISA. resource e.g. 'GPIB0::8::INSTR' or 'ASRL4::INSTR'."""
+
+    def _q(self, cmd):
+        with _BUS_LOCK:
+            return self.inst.query(cmd)
+
+    def _w(self, cmd):
+        with _BUS_LOCK:
+            return self.inst.write(cmd)
 
     def __init__(self, resource, name="SR830"):
         import pyvisa
@@ -220,65 +256,92 @@ class SR830:
             self.inst.write_termination = "\n"
             self.inst.write("OUTX 1")   # answer on GPIB
             self.inst.write("OVRM 1")   # keep front panel usable in GPIB remote
-        self.idn = self.inst.query("*IDN?").strip()
+        self.idn = self._q("*IDN?").strip()
         # NOTE: this driver never changes time constant, phase, reference or
         # filters -- those stay on the front panel. The sensitivity is changed only
         # by the optional "Auto range up" (photocurrent lock-in, off by default).
 
     def time_constant(self):
-        return SR830_TAU[int(self.inst.query("OFLT?"))]
+        return SR830_TAU[int(self._q("OFLT?"))]
 
     def sensitivity(self):
-        return SR830_SENS[int(self.inst.query("SENS?"))]
+        return SR830_SENS[int(self._q("SENS?"))]
+
+    def frequency(self):
+        """Reference (chopping) frequency in Hz, read only."""
+        return float(self._q("FREQ?"))
 
     # -- only for the optional auto range (off by default) --
     def sens_index(self):
-        return int(self.inst.query("SENS?"))
+        return int(self._q("SENS?"))
 
     def set_sens_index(self, i):
         """Change the sensitivity (used only by 'Auto range up', never otherwise)."""
-        self.inst.write(f"SENS {int(i)}")
+        self._w(f"SENS {int(i)}")
 
     def full_scale(self):
         """Full scale in the unit SNAP? returns: V, or A for the current inputs
         (I 1 MΩ: × 1e-6, I 100 MΩ: × 1e-8)."""
-        src = int(self.inst.query("ISRC?"))
+        src = int(self._q("ISRC?"))
         return SR830_SENS[self.sens_index()] * {2: 1e-6, 3: 1e-8}.get(src, 1.0)
 
     def read(self):
-        """Simultaneous snapshot -> np.array([X, Y, R, theta_deg])."""
-        vals = self.inst.query("SNAP?1,2,3,4").split(",")
-        return np.array([float(v) for v in vals])
+        """Simultaneous snapshot -> np.array([X, Y, R, theta_deg]). A garbled reply
+        (not exactly 4 numbers) is not used: the interface is cleared and the reading
+        repeated (up to 3 tries); the event is written to spcm_error.log."""
+        last = ""
+        for attempt in range(3):
+            reply = self._q("SNAP?1,2,3,4")
+            try:
+                vals = [float(v) for v in reply.strip().split(",")]
+                if len(vals) == 4:
+                    if attempt:
+                        _note(f"{self.name}: garbled reply {last!r}, good after "
+                              f"{attempt} retry")
+                    return np.array(vals)
+            except ValueError:
+                pass
+            last = reply
+            with _BUS_LOCK:
+                try:
+                    self.inst.clear()          # drop any half-read reply
+                except Exception:
+                    pass
+            time.sleep(0.05)
+        _note(f"{self.name}: garbled reply {last!r} 3 times")
+        raise IOError(f"{self.name}: the lock-in's reply could not be read 3 times in a row "
+                      f"(last: {last!r}). Check the GPIB cable and that no other program "
+                      "is talking to the lock-ins.")
 
     def slope_poles(self):
         """Low-pass filter order: 6/12/18/24 dB/oct -> 1/2/3/4."""
-        return int(self.inst.query("OFSL?")) + 1
+        return int(self._q("OFSL?")) + 1
 
     def input_unit(self):
         """'A' for the current inputs I(1MΩ)/I(100MΩ), else 'V' (ISRC?)."""
-        return "A" if int(self.inst.query("ISRC?")) >= 2 else "V"
+        return "A" if int(self._q("ISRC?")) >= 2 else "V"
 
     def overloaded(self):
         """True if input/amplifier or output overload (LIAS bits 0-2)."""
-        status = int(self.inst.query("LIAS?"))
+        status = int(self._q("LIAS?"))
         return bool(status & 0b111)
 
     def set_aux_out(self, channel, volts):
-        self.inst.write(f"AUXV {int(channel)},{volts:.4f}")
+        self._w(f"AUXV {int(channel)},{volts:.4f}")
 
     def aux_in(self, channel=1):
         """Voltage on the rear-panel AUX IN 1-4 (±10.5 V), e.g. the SR570
         output for a DC I-V."""
-        return float(self.inst.query(f"OAUX? {int(channel)}"))
+        return float(self._q(f"OAUX? {int(channel)}"))
 
     # reference SINE OUT amplitude (Vrms, 0.004-5.000 V in 2 mV steps).
     # Only used by the power lock during a scan.
     def sine_amplitude(self):
-        return float(self.inst.query("SLVL?"))
+        return float(self._q("SLVL?"))
 
     def set_sine_amplitude(self, v):
         v = round(min(max(v, 0.004), 5.0) / 0.002) * 0.002
-        self.inst.write(f"SLVL {v:.3f}")
+        self._w(f"SLVL {v:.3f}")
         return v
 
     def close(self):
@@ -495,7 +558,7 @@ class SimStage:
         if frac >= 1.0:
             self._mv = None
 
-    def position(self):
+    def position(self, quiet=False):
         self._update()
         return self.w.x, self.w.y
 
@@ -552,6 +615,9 @@ class SimSR830:
 
     def sens_index(self):
         return self._si()
+
+    def frequency(self):
+        return 1013.0
 
     def set_sens_index(self, i):
         self.sens_i = int(min(max(i, 0), len(SR830_SENS) - 1))

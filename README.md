@@ -60,7 +60,7 @@ The left side has two tabs:
 - **Scan**: scan area, focus, timing, bias and save.
 - **Instruments**: photocurrent amplifier, lock-in readout and laser power.
 
-**Start/Stop** and the progress bar are always visible underneath. The laser power on the sample is also always shown in the status bar at the bottom right. **View → Dark theme** switches between light and dark.
+**Start/Stop** and the progress bar are always visible underneath. **Stop & save** stops and keeps what was measured; **Stop & discard** needs a **double-click** (no question pops up) and deletes the measurement. The laser power on the sample is also always shown in the status bar at the bottom right. **View → Dark theme** switches between light and dark.
 
 - **Number fields** show their unit in the label: position and size in **µm**, step in **nm**, waits in **ms**. A plain number is in that unit, so `300` as the step means 300 nm. `k` multiplies by 1000, so `1k` as the step means 1000 nm = 1 µm. `u`/`µ`, `n` and `m` are absolute, so `1u` as the step means 1 µm, and `500n` as the size means 0.5 µm. `1e-1`, `0.1` and a decimal comma (`0,1`) also work. Inside the bias list, commas separate the values.
 - **Plot scales** pick the unit prefix by themselves (… 100 nA → 1 µA …), and the colour Min/Max boxes show values like `-2.1 nA`.
@@ -106,7 +106,13 @@ The left side has two tabs:
   - To protect the objective, you can set absolute `z_min` / `z_max` limits in `config.yaml`.
 - **Camera view**: the *Flip left-right* and *Flip up-down* boxes in the Camera tab make the image match how you see the sample. They are remembered.
 - **Angle (°)** (Scan area) rotates the scan frame counter-clockwise around the start position. This works in Step mode only.
-- **Draw a frame on a map:** choose **Draw ▾ → Scan frame** above the maps. A cyan frame appears on both maps:
+- **Scan direction, before you press Start:** a pink dashed **outline of the next scan** (from the
+  Map tab: start position, size, angle, Scan towards) is shown on both maps and on the
+  calibrated camera image. A dot marks the **start pixel**, the long arrow the direction of
+  each line, the short arrow where the next lines go; with Serpentine a third arrow shows the
+  way back on the second line. It moves as you change the values. Switch it off with
+  **Draw ▾ → Outline of the next scan** (remembered).
+- **Draw a frame on a map:** choose **Draw ▾ → Scan frame** above the maps. A cyan frame, with the same dot and arrows (how it will be scanned), appears on both maps:
   - Drag it to move it.
   - Drag the square handles to resize it.
   - Drag the round handle to rotate it.
@@ -122,6 +128,7 @@ The left side has two tabs:
    - **Power:** a list of powers **on the sample** in µW, e.g. `1:50:5` (1, 6, 11 … 46, 50), `1:100:*2` (1, 2, 4 … 64, 100: evenly spaced on a log scale) or `1, 2, 5, 10`. Each power is set with the 2 mV SINE OUT steps (always in one direction, like *Set power now*) that come closest, checked with the power meter, and the power actually reached is recorded.
    - **Bias:** a list of biases through the SR570, like the bias maps.
    - **Bias × power:** for every bias (outer loop), the whole power list (inner loop).
+   - **Finest: every SINE OUT step** (tick box, power and bias × power only): instead of a list, give **From** and **To** in µW. The power is set to *From*, then the SINE OUT goes **up one step at a time** (2 mV, or every Nth step with *Every … steps*) and a point is measured at every step, with the power on the sample measured each time, until *To* is reached. *Measure on the way down too* steps back down measuring as well (shows hysteresis); otherwise the SINE OUT goes back without measuring. Ticking it sets *Readings per point* to 1 (there are many points) and greys out the power list. *Est. time* is a rough estimate from the current power and SINE OUT (press Refresh in Instruments → Lock-ins). Not for line scans (too slow).
 3. **Readings per point** (10 by default): after the lock-ins have settled (the same wait as in Timing), this many readings are taken about one time constant apart. The mean is saved, and their standard deviation is the error bar.
 4. Press **Start sweep** (the Start button changes its name on this tab). Stop & save / Stop & discard work as for maps.
 
@@ -130,21 +137,31 @@ The **Plot** tab on the right shows the result live:
 - for power sweeps, a **log-log plot** with a fitted power law |S| = A·P^α and the value of α (one per bias);
 - for bias × power, one curve per bias (with a legend) and a **bias–power map** coloured by the photocurrent or photovoltage.
 
+**Where you measured:** if the spot lies on the map shown, `<name>_where.png` is saved at the start: the map with a cross on the spot (and in info.txt which map it was, even if that map was a rough scan you discarded).
+
 Afterwards the SINE OUT goes back to where it was in 2 mV steps (untick *Put the SINE OUT back afterwards* if you don't want that) and the bias ramps back to 0 V. Like every measurement it gets its own folder (`powersweep`, `biassweep` or `biaspowersweep` in the name) with the .h5, a PNG with the same plots, and a `_csv` folder with `sweep.csv` (numbers only, one row per point, every channel with its spread; the columns are listed in `info.txt`) and, for bias × power, `photocurrent_X_matrix.csv`.
 
 ## Line scans
-
-1. Choose **Draw ▾ → Line to scan along** above the maps. A yellow line appears on both maps; drag its ends (or the whole line) where you want it. The status bar shows its length and the number of points.
-2. Press **Scan this line** (it appears once the line is drawn). The laser steps along the line at any angle, using the **Step**, **Timing** and **Series** from the Map tab and the laser-power setting from the Instruments tab.
-3. The **Plot** tab on the right shows the signal and the reflection vs the distance along the line, one curve per value. With a **Series** of biases or laser powers you also get the **distance × bias** (or **distance × power**) image.
-
-You can draw the line on the camera image too, once the camera is calibrated. Line scans get their own folder too (`line` in the name): the .h5 has the same layout as maps, with 1-row images plus `distance_um` and the x, y of every point; a PNG; and `_csv/line.csv` (numbers only, columns listed in `info.txt`).
+The **Line** tab (left) has its own settings, separate from the map:
+- **Start x, y** and **End x, y** in µm from the origin. Type them, or draw the line on a map
+  or on the calibrated camera image (Draw ▾ → Line to scan along) and press **Use this line**.
+- **Step** (nm) along the line, and **Readings per point**: 1 = one reading per point, like a
+  map; more = that many readings about one time constant apart, the mean is saved and the
+  spread (standard deviation) as error bars (also in the CSV and the h5: `*_std`).
+- **Series**: nothing, bias or laser power on the sample, with its own values.
+- Timing (wait), laser power and the preamp settings come from the Map and Instruments tabs.
+- **Start line**: the result appears in the Plot tab and is saved like a map (own folder,
+  numbers-only CSV with the columns listed in info.txt, PNG).
+- **Where you measured:** when the line lies on the map shown, `<name>_where.png` is saved at
+  the start: the map (photocurrent and reflection) with the line, its start dot and an
+  arrow. info.txt says which map it was (its file name, or "map not saved" with its size
+  and place, e.g. a rough scan you discarded). No picture if the line is not on the map.
 
 ## Camera calibration
 
 Once calibrated, the program knows which stage position every camera pixel shows. Then you can:
 - **double-click the camera image** to move the laser to that spot;
-- **draw a scan frame** or **a line** on the live camera image, and press *Scan this frame* or *Scan this line*. The drawings stay on the same spot of the sample when the stage moves.
+- **draw a scan frame** or **a line** on the live camera image, and press *Scan this frame* or *Scan this line*. The drawings stay on the same spot of the sample when the stage moves. The frame has the start dot and direction arrows, and the pink dashed outline shows the next scan from the Map tab.
 
 To calibrate (once, and again after changing the objective or moving the camera):
 1. Focus, and put the **cyan cross on the laser spot**.
@@ -167,6 +184,8 @@ The **I–V** tab (left) measures the DC current against the bias from the SR570
 - **Wait per point (ms)** and **Readings per point**: after each bias step the program waits, then averages that many AUX IN readings.
 - **Sensitivity**: the SR570 front-panel sensitivity. The current is AUX IN voltage × sensitivity, so this must match the front panel.
 - **Sign:** if a positive bias gives a negative current, use the SR570's own **INVERT** button.
+- **Fit a straight line (resistance R)** (tick box, off by default, remembered): fits I = V/R + I0 through every point of the sweep, all cycles together. The fit line and R ± its error are shown on the live plot and in the PNG; R, I0 and r² (how straight: 1 = perfectly) go into the h5 (`fit` group) and info.txt.
+  - **R in the file name:** with the tick box on, R goes at the end of the name. The name is fixed before the sweep, so the folder and its files are renamed when the fit is done, e.g. `20261024_1720_flakeA_IV_-1to1V_R12.3kOhm`. Written as "Ohm", not "Ω", so every program can open it.
 
 Press **Start I–V**, the Start button on this tab. The **Plot** tab on the right shows the curve live, one colour per cycle.
 
@@ -179,6 +198,56 @@ Press **Start I–V**, the Start button on this tab. The **Plot** tab on the rig
 - `<name>.h5` holds the dataset `iv`, one row per point: bias (V), current (A), cycle, time (s), AUX IN (V).
 - `<name>_csv/iv.csv` has the same columns, numbers only.
 - `<name>.png` is the plot.
+
+## Phase correction (automatic, after every map and line scan)
+Instead of autophasing the lock-in at the strongest point, the program finds the phase from
+the finished measurement. All real photocurrent has one phase, so in the X–Y plane its pixels
+lie on one straight line through zero; noise is a round blob. The program takes the pixels
+clearly above the noise (5×), finds the direction of that line, and rotates X and Y by that
+one angle for the whole map (and for all maps of a series, so sign changes with bias stay).
+
+- **Spikes:** strong pixels whose phase doesn't fit the line are ignored (red × in the plot).
+- **Sign** (a line has two directions, 180° apart): the program takes the one closest to the
+  angle it used last time. As long as the lock-in phase, cables, SR570 setting and chopping
+  frequency are unchanged, the right angle stays about the same, so every file gets the same
+  sign convention. The first time, or if the new angle is more than 30° from the last one
+  (then you get a warning: something was changed), it takes the direction in which most of
+  the signal is positive.
+- **Series:** each map is also fitted on its own, only as a check; if the angles differ by
+  more than their uncertainty, the window warns that the phase may change with bias / power.
+
+- It works on the processed photocurrent (after the SR570 / √2 conversion).
+- The result goes into a **separate copy** in the same folder: `<name>_phased.h5`, its CSV
+  folder and PNG(s). The measurement itself is never changed, and the copy keeps the raw
+  lock-in readings unrotated in `raw/`. The angle and how it was found are in
+  `info/phase_correction` and in info.txt.
+- A window shows the X–Y cloud with the line, and **Y after the correction**, on the same
+  colour scale as the signal: it should look flat (noise only). If it doesn't, the message
+  says so (background pickup, or a phase change during the scan).
+- The window is **for looking only**: there is nothing to save or confirm; the copy and the
+  PNGs are already saved when it opens.
+- **Subtract substrate background** (tick box): move the green box over bare substrate; its
+  mean X, Y is subtracted first, the phase is found again and the copy is saved again by
+  itself.
+- If there is no clear signal, no copy is made (just a short message).
+- **Phase lag** view (list at the bottom left of the window): the lag of every pixel in
+  degrees relative to the common phase, and what 1° means in µs at the chopping frequency.
+- The window's two views are also saved as PNGs next to the copy, automatically:
+  `<name>_phased_check.png` (X–Y cloud + Y after the correction) and
+  `<name>_phased_lag.png` (X–Y cloud + phase lag of each pixel); one pair per map of a series
+  (not for line-scan series: there the corrected figure of the whole series is enough).
+- *File → Phase correction of the shown map / line…* opens the window again later. It shows
+  the copy as it was saved (with or without the substrate background); if there is no copy
+  yet, it is made then.
+
+## Point and line cursors (reading values)
+Draw ▾ → **Point cursor** or **Line cursor**. The cursor appears on both maps; drag it on
+either one. A window shows the values of the **nearest measured pixel** (never interpolated):
+photocurrent X, Y, R, θ, the phase-corrected X′, Y′ (if a corrected copy exists) and the
+reflection. For a series, every map is read: the point gives a curve against bias / power,
+the line one profile per bias / power. The line is sampled at the scan step, with
+photocurrent and reflection on the same distance axis. **Save** writes numbers-only CSV +
+info.txt to `<name>_cursors/` next to the measurement.
 
 ## Measuring the resolution
 
@@ -226,15 +295,32 @@ In the window:
 
 ## Opening your data
 
-**Every measurement gets its own folder** inside the save folder, named like the measurement. By default the name is
+**Every measurement gets its own folder** inside the save folder, named like the measurement. The names are made by the program (1.2.15):
 
-`sample_date_size_step_power_number`, for example `flakeA_20261015_20x20um_500nm_10uW_001`
+`date_time_sample_wavelength_type_details`
 
-- **File name** (Save box): pick another pattern from the list or type your own. **Add ▾** inserts fields: sample, date, time, size, step, power on the sample, bias, scan mode, type and the running number `{n}`. It also offers every quantity from the **Experiment notes** tab, such as `{Temperature}` or `{Polarization}`. The grey line under it shows the next name.
-- The power in the name is the target power if *Set the laser power before each scan* is ticked, otherwise what the meter reads at the start. `{n}` counts up (001, 002 …) so a name is never used twice.
+- The **start is always the same**: date, start time (`HHMM`), sample, wavelength, then `map`, `line`, `point` or `IV`. So **sorting by name gives the order you measured in**, whatever the type, even after copying or uploading. Two measurements started in the same minute: the second gets `_2`.
+- The **wavelength** is read from the power meter's settings (none without the power meter, none for the I–V).
+- **Details** depend on the type:
+
+| Type | Example |
+|---|---|
+| map | `20261024_1432_flakeA_532nm_map_20x20um_500nm_10uW` |
+| map at +0.5 V | `…_map_20x20um_500nm_10uW_+0.5V` |
+| map bias series | folder `…_map_20x20um_500nm_10uW_-1to1V`; each map's PNG / CSV `…_10uW_-0.5V` |
+| map power series | folder `…_map_20x20um_500nm_1to20uW`; each map `…_500nm_5uW` |
+| line | `20261024_1610_flakeA_532nm_line_12um_200nm_10uW` (+ `_+0.5V` with bias) |
+| line series | `…_line_bias_-1to1V_12um_200nm_10uW` / `…_line_power_1to20uW_12um_200nm` |
+| point sweep | `…_point_power_1to20uW` / `…_point_bias_-1to1V_10uW` / `…_point_biaspower_-1to1V_1to20uW` |
+| I–V | `20261024_1720_flakeA_IV_-1to1V` (+ `_R12.3kOhm` with the fit) |
+
+- The **power** is the target power if *Set the laser power before each scan* is ticked, otherwise what the meter reads at the start. The **bias** appears only when one is used.
+- **Add at the end** (each tab's *File name* box): optional values from the **Experiment notes** tab, e.g. `{Temperature}` → `…_77K`. Empty by default; nothing from the notes is added by itself.
+- The grey line in each tab shows the next name; it turns red above 80 characters (very long names can hit the Windows path limit).
+- **Sample** and **Folder** are at the top, above the tabs, the same for every measurement.
 
 Inside each measurement folder:
-- **`<name>_map0.png`**: a ready-made figure for each map. On the left is the photocurrent or photovoltage map (blue–white–red, symmetric around zero, with a colour bar in nA, µV, etc.); on the right is the reflection map in grey. The title follows your setup: **Photocurrent** with the SR570, **Photovoltage** with the SR560, and with the lock-in alone it depends on its input (current input → photocurrent, A or A−B → photovoltage). **File → Save figure of shown map…** saves the map currently shown as PNG, PDF or SVG. It uses your Manual colour limits if you set them.
+- **`<name>.png`** (a series: one PNG per map, named with that map's bias / power): a ready-made figure for each map. On the left is the photocurrent or photovoltage map (blue–white–red, symmetric around zero, with a colour bar in nA, µV, etc.); on the right is the reflection map in grey. The title follows your setup: **Photocurrent** with the SR570, **Photovoltage** with the SR560, and with the lock-in alone it depends on its input (current input → photocurrent, A or A−B → photovoltage). **File → Save figure of shown map…** saves the map currently shown as PNG, PDF or SVG. It uses your Manual colour limits if you set them.
 - **`<name>.h5`**: everything in one file (all maps, raw and converted, settings, notes, power log). Open it with:
   - SPCM itself: **File → Open saved scan…**
   - **Origin**: *Data → Import → HDF5*.

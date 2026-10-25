@@ -23,6 +23,36 @@ def _prefix(vmax):
     return 1.0, ""
 
 
+LEGEND_MAX = 8   # more curves than this: a colour bar instead of a legend
+
+
+def series_key(values, log=False):
+    """Colours for one curve per series value, by value (viridis, dark = low).
+    -> (colors, mappable or None). mappable is None when a legend fits (<= LEGEND_MAX
+    curves); otherwise use add_series_bar(), so no legend covers the curves."""
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import ListedColormap, Normalize, LogNorm
+    n = max(len(values), 1)
+    vals = np.array([np.nan if v is None else v for v in values], float)
+    if n <= LEGEND_MAX or not np.isfinite(vals).all() or vals.min() == vals.max():
+        return plt.cm.viridis(np.linspace(0, 0.9, n)), None
+    cmap = ListedColormap(plt.cm.viridis(np.linspace(0, 0.9, 256)))
+    norm = (LogNorm(vals.min(), vals.max()) if log and vals.min() > 0
+            else Normalize(vals.min(), vals.max()))
+    sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
+    return [cmap(norm(v)) for v in vals], sm
+
+
+def add_series_bar(fig, axes, sm, label):
+    """Colour bar for the curves (instead of a legend), right of the given axes."""
+    if sm is None:
+        return None
+    cb = fig.colorbar(sm, ax=axes, pad=0.015, fraction=0.035, aspect=30)
+    cb.set_label(label, fontsize=9)
+    cb.ax.tick_params(labelsize=8)
+    return cb
+
+
 def _nice(v):
     """Round up to 1, 1.5, 2, 2.5, 3, 4, 5, 6, 7, 8, 10 x 10^n."""
     if v <= 0 or not np.isfinite(v):
@@ -78,7 +108,8 @@ def save_figure(d, ib, path, channel=0, refl_channel=2, limits=None,
     im = ax1.imshow(sig / scale, origin="lower", extent=ext, cmap="bwr",
                     vmin=lo / scale, vmax=hi / scale, interpolation="nearest",
                     aspect="equal")
-    ax1.set_title(kind, pad=10)
+    ph = getattr(d, "phase", None)
+    ax1.set_title(kind + (f" (phase {ph['phase_deg']:+.1f}°)" if ph else ""), pad=10)
     cb = fig.colorbar(im, cax=cax)
     if limits is None:
         t = hi / scale
@@ -110,12 +141,11 @@ def save_figure(d, ib, path, channel=0, refl_channel=2, limits=None,
 
 def save_all(d):
     """One PNG per map next to the .h5 file: <name>_map0.png, ..."""
-    base = os.path.splitext(d.path)[0]
     out = []
-    from scanner import outer_tag
+    from scanner import map_bases
+    bases = map_bases(d)                 # each map's own name (or <name>_map<k>_<value>)
     for ib, b in enumerate(d.settings.outer_list()):
         if not np.isfinite(d.pc[ib, :, :, 0]).any():
             continue
-        suffix = f"_map{ib}" + outer_tag(d.settings, b)
-        out.append(save_figure(d, ib, base + suffix + ".png"))
+        out.append(save_figure(d, ib, bases[ib] + ".png"))
     return out

@@ -42,6 +42,17 @@ def _colors(n):
     return cm.map(np.linspace(0.0, 0.9, max(n, 1)), mode="qcolor")
 
 
+LEGEND_MAX = 8   # more curves: no legend (it would cover them), a colour note instead
+
+
+def _colour_note(vals, unit):
+    """'colours: dark = first … light = last' for many curves."""
+    v = [b for b in vals if b is not None]
+    if len(v) <= LEGEND_MAX:
+        return ""
+    return f"  ·  colours: dark = {v[0]:g} {unit} … light = {v[-1]:g} {unit}"
+
+
 class SweepView(QtWidgets.QWidget):
     """Linear plot (with error bars), log-log plot (with the fitted slope) and,
     for bias × power sweeps, a bias–power map."""
@@ -150,6 +161,11 @@ class SweepView(QtWidgets.QWidget):
             self.log.setLabel("bottom", "Power on sample", units="µW")
             self.log.setLabel("left", f"|{kind} {ch}| ({lpre}{unit})")
             self.log.setTitle("log-log, fit |S| = A·P^α")
+        many = nb > LEGEND_MAX and s.kind != "bias"
+        for leg in (self.lin_leg, self.log_leg):
+            leg.setVisible(not many)
+        if many:
+            self.lin.setTitle(self.lin.titleLabel.text + _colour_note(list(d.biases), "V"))
         if s.kind == "bias_power":
             self._draw_map(d, sig, unit, kind, ch)
         n_done = int(np.isfinite(sig).sum())
@@ -162,16 +178,25 @@ class SweepView(QtWidgets.QWidget):
         m = sig[order]
         if not np.isfinite(m).any():
             return
+        finest = bool(getattr(d.settings, "finest", False))
+        if finest:                              # only the columns measured so far
+            used = np.isfinite(m).any(axis=0)
+            m = m[:, :int(np.nonzero(used)[0][-1]) + 1]
         lim = float(np.nanpercentile(np.abs(m), 99.5)) or 1e-30
         img = np.where(np.isfinite(m), m, 0.0)
         self.img.setImage(img, autoLevels=False)
         self.img.setRect(-0.5, -0.5, m.shape[1], m.shape[0])   # index grid
         self.bar.setLevels((-lim, lim))
         self.bar.axis.setLabel(f"{kind} {ch}", units=unit)
-        pw = list(d.powers)
+        if finest:                              # measured power of each step
+            with np.errstate(all="ignore"):
+                pw = list(np.nanmean(d.p_uW[:, :m.shape[1]], axis=0))
+        else:
+            pw = list(d.powers)
         every = max(1, len(pw) // 8)
         self.map.getAxis("bottom").setTicks(
-            [[(i, f"{p:g}") for i, p in enumerate(pw) if i % every == 0]])
+            [[(i, f"{p:.3g}") for i, p in enumerate(pw)
+              if i % every == 0 and p is not None and np.isfinite(p)]])
         bs = bx[order]
         every = max(1, len(bs) // 10)
         self.map.getAxis("left").setTicks(
@@ -187,8 +212,8 @@ class LineView(QtWidgets.QWidget):
         super().__init__()
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        self.info = QtWidgets.QLabel("No line scan yet. On the Maps tab press 'Draw line', "
-                                     "drag its ends, then 'Scan this line'.")
+        self.info = QtWidgets.QLabel("No line scan yet. Set the line in the Line tab (or draw "
+                                     "it: Draw ▾ → Line to scan along), then Start line.")
         self.info.setStyleSheet("color:gray")
         self.info.setWordWrap(True)
         lay.addWidget(self.info)
@@ -242,9 +267,19 @@ class LineView(QtWidgets.QWidget):
             self.sig.plot(dist[ok], sig[ib][ok], pen=pg.mkPen(c, width=1.5), symbol="o",
                           symbolSize=4, symbolPen=None, symbolBrush=c,
                           name=None if b is None else f"{b:g} {punit}")
+            sd = linescan.signal_std(d, channel)
+            if sd is not None:                   # error bars: spread of the readings
+                okd = ok & np.isfinite(sd[ib])
+                if okd.any():
+                    self.sig.addItem(pg.ErrorBarItem(
+                        x=dist[okd], y=sig[ib][okd], height=2 * sd[ib][okd],
+                        beam=0, pen=pg.mkPen(c, width=1)))
             r = d.refl[ib, 0, :, 2]
             okr = np.isfinite(r)
             self.refl.plot(dist[okr], r[okr], pen=pg.mkPen(c, width=1.2))
+        self.leg.setVisible(nb <= LEGEND_MAX)
+        if nb > LEGEND_MAX:
+            self.sig.setTitle(self.sig.titleLabel.text + _colour_note(vals, punit))
         multi = nb > 1
         self.map.setVisible(multi)
         if multi:
@@ -266,4 +301,6 @@ class LineView(QtWidgets.QWidget):
                 self.map.setTitle(f"{kind}: distance × {pname.split()[-1].lower()}")
         n = int(np.isfinite(sig).sum())
         self.info.setText(f"{n} of {sig.size} points  ·  {dist[-1]:.2f} µm, "
-                          f"{len(dist)} points per line, step {s.step * 1000:.0f} nm")
+                          f"{len(dist)} points per line, step {s.step * 1000:.0f} nm"
+                          + (f", {int(getattr(s, 'n_avg', 1))} readings per point (bars = std)"
+                             if int(getattr(s, "n_avg", 1) or 1) > 1 else ""))

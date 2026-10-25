@@ -8,12 +8,45 @@ import os
 import time
 import json
 import traceback
+import contextlib
 from dataclasses import dataclass, field, asdict
 
 import numpy as np
 
 from numparse import parse_number
 from instruments import SR830_SENS
+
+
+def autosave(d, path, notify=None):
+    """Save during a measurement. A failure (e.g. the file is open in another program)
+    does not stop the measurement: a warning, and the next autosave tries again."""
+    try:
+        d.save(path)
+    except Exception as e:
+        if notify is not None:
+            notify.emit(f"Autosave failed ({e}). The measurement goes on; it is saved "
+                        "again after the next map / line and at the end.", "warn")
+
+
+@contextlib.contextmanager
+def atomic_h5(path):
+    """Write an HDF5 file safely: first into <path>.part, then swap it in. If the
+    program or the PC stops while writing, the last saved file is still complete
+    (before, the file was emptied first and then written, so a crash at that moment
+    lost everything). If the swap fails (file open in another program), the new data
+    stays in <path>.part and an error says so."""
+    import h5py
+    tmp = path + ".part"
+    with h5py.File(tmp, "w") as f:
+        yield f
+    for _ in range(10):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            time.sleep(0.3)
+    raise OSError(f"Could not write {os.path.basename(path)} - is it open in another "
+                  f"program? The newest data is in {os.path.basename(tmp)} next to it.")
 try:
     from pyqtgraph.Qt import QtCore
 except ImportError:  # headless use / testing without Qt
@@ -76,6 +109,11 @@ class ScanSettings:
                                    # the scan direction (removes stage backlash)
     extra_settle_ms: float = 0.0
     auto_range: bool = False       # photocurrent lock-in: next range up above AUTO_RANGE_FRAC
+    n_avg: int = 1                 # readings per point (line scans), ~1 tau apart; 1 = like a map
+    where_map: str = ""            # line scans: the map the line was marked on (_where.png)
+    file_name: str = ""            # the measurement's name (1.2.15 names) ...
+    map_names: list = field(default_factory=list)   # ... and each map's own name (series:
+                                   # the range swapped for that map's value) for PNG / CSV
     biases: list = field(default_factory=lambda: [None])  # None = don't touch bias
     sample: str = "sample"
     notes: str = ""
@@ -146,6 +184,22 @@ def outer_name(s):
 def outer_text(s, v):
     """'0.5 V', '20 µW', or '' for a single map."""
     return "" if v is None else f"{v:g} {outer_name(s)[1]}"
+
+
+def map_bases(d):
+    """Path without extension for each map's own PNG and CSV folder.
+    1.2.15 names: <folder>/<map name> (a series: the range swapped for the map's value;
+    a phase-corrected copy adds _phased). Older files: <name>_map<k>_<value>."""
+    s = d.settings
+    vals = s.outer_list()
+    base = os.path.splitext(d.path)[0]
+    names = list(getattr(s, "map_names", None) or [])
+    fname = getattr(s, "file_name", "") or ""
+    if names and len(names) == len(vals) and fname:
+        stem = os.path.basename(base)
+        suffix = stem[len(fname):] if stem.startswith(fname) else ""
+        return [os.path.join(os.path.dirname(base), n + suffix) for n in names]
+    return [base + f"_map{ib}" + outer_tag(s, b) for ib, b in enumerate(vals)]
 
 
 def outer_tag(s, v):
@@ -283,6 +337,13 @@ class ScanData:
         self.power_lock = {}    # target, start amplitude
         self.started = time.strftime("%Y-%m-%dT%H:%M:%S")
         self.completed = False
+        # spread (std) of the readings per point when several are averaged (n_avg > 1)
+        self.pc_std = self.refl_std = None
+        if int(getattr(settings, "n_avg", 1) or 1) > 1:
+            self.pc_std = np.full_like(self.pc, np.nan)
+            self.refl_std = np.full_like(self.refl, np.nan)
+        self.raw_pc = None      # phase-corrected copy: the unrotated lock-in readings
+        self.phase = None       # phase-corrected copy: angle, offset, ... (phase.py)
 
     def save(self, path):
         """Tidy file: one group per map with plain 2-D images, ready to plot.
@@ -311,7 +372,7 @@ class ScanData:
         if line:                         # a line keeps its order: start -> end
             ix, iy = np.arange(len(self.xs)), np.arange(len(self.ys))
         view = np.ix_(iy, ix)
-        with h5py.File(path, "w") as f:
+        with atomic_h5(path) as f:
             f.attrs["format"] = "SPCM v2 (one group per map)"
             f.attrs["scan_type"] = "line" if line else "map"
             f.attrs["sample"] = s.sample
@@ -330,6 +391,15 @@ class ScanData:
             for k, v in s.conditions.items():
                 exp.attrs[k] = str(v)
             exp.attrs["notes"] = s.notes
+            if self.phase:
+                ph = info.create_group("phase_correction")
+                for k, v in self.phase.items():
+                    ph.attrs[k] = v if not isinstance(v, (list, dict)) else json.dumps(v)
+                ph.attrs["note"] = ("photocurrent_* = processed photocurrent rotated by "
+                                    "phase_deg (X' = X cos + Y sin, after subtracting offset); "
+                                    "raw/* = lock-in readings as measured, NOT rotated")
+                f.attrs["phase_corrected_deg"] = self.phase.get("phase_deg", 0.0)
+            raw = self.raw_pc if self.raw_pc is not None else self.pc
             olabel, ounit = outer_name(s)
             is_bias = getattr(s, "outer", "bias") == "bias"
             for ib, b in enumerate(s.outer_list()):
@@ -339,7 +409,11 @@ class ScanData:
                     g.attrs["series"] = f"{olabel} ({ounit})"
                     g.attrs["series_value"] = np.nan if b is None else b
                 for k, v in (self.map_info[ib] or {}).items():
-                    if v is not None and not isinstance(v, (list, dict)):
+                    if v is None:
+                        continue
+                    if isinstance(v, (list, dict)):       # range changes, filter slopes
+                        g.attrs[k] = "json:" + json.dumps(v)
+                    else:
                         g.attrs[k] = v
                 g["x_um"], g["y_um"] = ux[ix], vy[iy]
                 g.attrs["angle_deg"] = getattr(s, "angle_deg", 0.0)
@@ -361,9 +435,18 @@ class ScanData:
                                          data=self.refl[ib, :, :, c][view], compression="gzip")
                     d.attrs["unit"] = "V" if c < 3 else "deg"
                     g.create_dataset(f"raw/photocurrent_{nm}",
-                                     data=self.pc[ib, :, :, c][view], compression="gzip")
+                                     data=raw[ib, :, :, c][view], compression="gzip")
                     g.create_dataset(f"raw/reflection_{nm}",
                                      data=self.refl[ib, :, :, c][view], compression="gzip")
+                if self.pc_std is not None:      # spread of the averaged readings
+                    for c, ch in enumerate(CHANNELS[:3]):
+                        dd = g.create_dataset(f"photocurrent_{ch}_std",
+                                              data=(self.pc_std[ib, :, :, c] * fac)[view])
+                        dd.attrs["unit"] = unit
+                        dd = g.create_dataset(f"reflection_{ch}_std",
+                                              data=self.refl_std[ib, :, :, c][view])
+                        dd.attrs["unit"] = "V"
+                    g.attrs["readings_per_point"] = int(getattr(s, "n_avg", 1))
                 g["photocurrent_X"].attrs["conversion"] = formula
                 # laser power and camera at the start/end of this map
                 for when in ("start", "end"):
@@ -405,8 +488,10 @@ def export_csv(d):
     Each CSV is a matrix: first row = x (µm), first column = y (µm).
     Photocurrent is converted (same as the map); reflection is as read."""
     base = os.path.splitext(d.path)[0]
+    new_names = bool(getattr(d.settings, "map_names", None))
     out = base + "_csv"
-    os.makedirs(out, exist_ok=True)
+    if not new_names:
+        os.makedirs(out, exist_ok=True)
     fac, unit, formula = pc_scale(d.settings)
     unit = unit or getattr(d.settings, "lockin_unit", "V")
     st = d.settings
@@ -415,8 +500,13 @@ def export_csv(d):
     ux = (-1 if getattr(st, "flip_x", False) else 1) * (np.asarray(d.xs) - ox) + 0.0
     vy = (-1 if getattr(st, "flip_y", False) else 1) * (np.asarray(d.ys) - oy) + 0.0
     ix, iy = np.argsort(ux), np.argsort(vy)
+    subs = []
     for ib, b in enumerate(d.settings.outer_list()):
-        sub = os.path.join(out, f"map{ib}" + outer_tag(d.settings, b))
+        if new_names:                    # 1.2.15: <map name>_csv/ next to the .h5
+            sub = map_bases(d)[ib] + "_csv"
+        else:
+            sub = os.path.join(out, f"map{ib}" + outer_tag(d.settings, b))
+        subs.append(sub)
         os.makedirs(sub, exist_ok=True)
         for name, arr, f_, u in (("photocurrent", d.pc, fac, unit),
                                  ("reflection", d.refl, 1.0, "V")):
@@ -427,39 +517,46 @@ def export_csv(d):
                     for r in range(m.shape[0]):     # numbers only (axes: info.txt)
                         fh.write(",".join("" if not np.isfinite(v) else f"{v:.6e}"
                                           for v in m[r]) + "\n")
-    with open(os.path.join(out, "info.txt"), "w", encoding="utf-8") as fh:
-        s = d.settings
-        fh.write(f"Sample: {s.sample}\nStarted: {d.started}\nCompleted: {d.completed}\n")
-        fh.write(f"Photocurrent conversion: {formula} [{unit}]\n")
-        fh.write("\nCSV files: plain matrices of numbers. Row = y, column = x, first row "
-                 "= lowest y (as on screen). Photocurrent in "
-                 f"{unit}, reflection in V, theta in degrees.\n")
-        fh.write(f"x (µm, from the origin), one value per column: "
-                 + ", ".join(f"{x:.4f}" for x in ux[ix]) + "\n")
-        fh.write(f"y (µm, from the origin), one value per row: "
-                 + ", ".join(f"{y:.4f}" for y in vy[iy]) + "\n")
-        fh.write(f"Origin (0, 0) = stage ({ox:.3f}, {oy:.3f}) µm\n\n")
-        fh.write("Experiment:\n")
-        for k, v in (s.conditions or {}).items():
-            fh.write(f"  {k}: {v}\n")
-        fh.write(f"\nNotes:\n{s.notes}\n\nScan settings:\n")
-        for k, v in asdict(s).items():
-            if k not in ("conditions", "notes"):
+    for tgt in (subs if new_names else [out]):     # every map folder gets the info
+        with open(os.path.join(tgt, "info.txt"), "w", encoding="utf-8") as fh:
+            s = d.settings
+            fh.write(f"Sample: {s.sample}\nStarted: {d.started}\nCompleted: {d.completed}\n")
+            fh.write(f"Photocurrent conversion: {formula} [{unit}]\n")
+            ph = getattr(d, "phase", None)
+            if ph:
+                fh.write(f"PHASE-CORRECTED COPY of {ph.get('source_file', '')}: photocurrent X, Y, "
+                         f"theta rotated by {ph.get('phase_deg', 0):.2f}° (X' = X cos + Y sin), "
+                         f"background subtracted: {ph.get('offset', [0, 0])} {ph.get('offset_unit', '')}"
+                         f"\n  {ph.get('message', '')}\n")
+            fh.write("\nCSV files: plain matrices of numbers. Row = y, column = x, first row "
+                     "= lowest y (as on screen). Photocurrent in "
+                     f"{unit}, reflection in V, theta in degrees.\n")
+            fh.write(f"x (µm, from the origin), one value per column: "
+                     + ", ".join(f"{x:.4f}" for x in ux[ix]) + "\n")
+            fh.write(f"y (µm, from the origin), one value per row: "
+                     + ", ".join(f"{y:.4f}" for y in vy[iy]) + "\n")
+            fh.write(f"Origin (0, 0) = stage ({ox:.3f}, {oy:.3f}) µm\n\n")
+            fh.write("Experiment:\n")
+            for k, v in (s.conditions or {}).items():
                 fh.write(f"  {k}: {v}\n")
-        fh.write("\nPer map (lock-in settings read from the front panels):\n")
-        for ib, mi in enumerate(d.map_info):
-            fh.write(f"  map{ib}: {json.dumps(mi)}\n")
-        for key, vals in sorted(d.accessories.items()):
-            if "powermeter" in key:
-                fh.write(f"  {key}: " + ", ".join(
-                    f"{k}={v:.4g}" if isinstance(v, float) else f"{k}={v}"
-                    for k, v in vals.items() if k != "time") + "\n")
-        fh.write(f"\nInstruments: {json.dumps(d.hw_info)}\n")
-    if d.power_log:
-        np.savetxt(os.path.join(out, "power_log.csv"),
-                   np.array(d.power_log, float)[:, [2, 5]], delimiter=",",
-                   header="time_s,power_on_sample_uW", comments="")
-    return out
+            fh.write(f"\nNotes:\n{s.notes}\n\nScan settings:\n")
+            for k, v in asdict(s).items():
+                if k not in ("conditions", "notes"):
+                    fh.write(f"  {k}: {v}\n")
+            fh.write("\nPer map (lock-in settings read from the front panels):\n")
+            for ib, mi in enumerate(d.map_info):
+                fh.write(f"  map{ib}: {json.dumps(mi)}\n")
+            for key, vals in sorted(d.accessories.items()):
+                if "powermeter" in key:
+                    fh.write(f"  {key}: " + ", ".join(
+                        f"{k}={v:.4g}" if isinstance(v, float) else f"{k}={v}"
+                        for k, v in vals.items() if k != "time") + "\n")
+            fh.write(f"\nInstruments: {json.dumps(d.hw_info)}\n")
+        if d.power_log:
+            np.savetxt(os.path.join(tgt, "power_log.csv"),
+                       np.array(d.power_log, float)[:, [2, 5]], delimiter=",",
+                       header="time_s,power_on_sample_uW", comments="")
+    return subs[0] if new_names else out
 
 
 def _settings_from(st):
@@ -492,14 +589,31 @@ def load(path):
             d.pc = np.full((nb, ny, nx, 4), np.nan)
             d.refl = np.full((nb, ny, nx, 4), np.nan)
             d.map_info = []
+            d.pc_std = d.refl_std = None          # filled below if the file has them
             for ib, m in enumerate(maps):
                 g = f[m]
                 for c, ch in enumerate(CHANNELS):
                     nm = ch if c < 3 else "theta_deg"
                     d.pc[ib, :, :, c] = g[f"raw/photocurrent_{nm}"][()]
                     d.refl[ib, :, :, c] = g[f"raw/reflection_{nm}"][()]
-                d.map_info.append({k: (v.item() if hasattr(v, "item") else v)
-                                   for k, v in g.attrs.items()})
+                if "photocurrent_X_std" in g:
+                    if d.pc_std is None:
+                        d.pc_std = np.full_like(d.pc, np.nan)
+                        d.refl_std = np.full_like(d.refl, np.nan)
+                    fac_ = pc_scale(d.settings)[0]
+                    for c, ch in enumerate(CHANNELS[:3]):
+                        d.pc_std[ib, :, :, c] = g[f"photocurrent_{ch}_std"][()] / fac_
+                        d.refl_std[ib, :, :, c] = g[f"reflection_{ch}_std"][()]
+                mi = {}
+                for k, v in g.attrs.items():
+                    v = v.item() if hasattr(v, "item") else v
+                    if isinstance(v, str) and v.startswith("json:"):
+                        try:
+                            v = json.loads(v[5:])
+                        except ValueError:
+                            pass
+                    mi[k] = v
+                d.map_info.append(mi)
                 for when in ("start", "end"):
                     pm = {k[len("laser_"):-len(when) - 1]: g.attrs[k] for k in g.attrs
                           if k.startswith("laser_") and k.endswith("_" + when)}
@@ -522,6 +636,17 @@ def load(path):
                                                    a[:, 1]]).tolist()
             d.power_lock = json.loads(info.attrs.get("laser_power_setting",
                                                      info.attrs.get("power_lock", "{}")))
+            if "phase_correction" in info:     # phase-corrected copy: show the rotated data
+                ph = info["phase_correction"]
+                d.phase = {k: (v.item() if hasattr(v, "item") else v)
+                           for k, v in ph.attrs.items()}
+                fac = pc_scale(d.settings)[0]
+                d.raw_pc = d.pc.copy()
+                for ib, m in enumerate(maps):
+                    g = f[m]
+                    for c, ch in enumerate(CHANNELS):
+                        nm = ch if c < 3 else "theta_deg"
+                        d.pc[ib, :, :, c] = g[f"photocurrent_{nm}"][()] / (fac if c < 3 else 1)
         else:                                             # ---- older files
             d = ScanData(_settings_from(json.loads(f.attrs["settings"])),
                          json.loads(f.attrs["hardware"]))
@@ -589,6 +714,17 @@ class SafeStage:
 
 SINE_STEP_V = 0.002       # SR830 SINE OUT resolution
 AUTO_RANGE_FRAC = 0.8     # auto range: go up one range above 80 % of full scale
+
+
+def _average(readings):
+    """Mean and spread (std, ddof=1) of several lock-in readings [X, Y, R, theta]:
+    X, Y, R averaged; theta from the mean X, Y (averaging angles near ±180° fails)."""
+    a = np.array(readings, float)
+    m = a.mean(0)
+    m[3] = np.degrees(np.arctan2(m[1], m[0]))
+    sd = a.std(0, ddof=1) if len(a) > 1 else np.zeros(4)
+    sd[3] = np.nan
+    return m, sd
 
 
 def range_up(li, R, fs, frac=AUTO_RANGE_FRAC):
@@ -859,13 +995,9 @@ class ScanWorker(QtCore.QObject):
 
     # ------------------------------------------------------------ step mode
     def _read_both(self):
-        """Read both lock-ins at the same time (saves one GPIB round trip)."""
-        if not hasattr(self, "_pool"):
-            from concurrent.futures import ThreadPoolExecutor
-            self._pool = ThreadPoolExecutor(2)
-        f1 = self._pool.submit(self.hw.lockin_pc.read)
-        f2 = self._pool.submit(self.hw.lockin_refl.read)
-        return f1.result(), f2.result()
+        """Read both lock-ins, one after the other: they share the GPIB bus, and reading
+        them at the same time from two threads could mix their replies."""
+        return self.hw.lockin_pc.read(), self.hw.lockin_refl.read()
 
     def _step_line(self, ib, iy, forward, wait):
         d, hw, nx = self.data, self.hw, len(self.data.xs)
@@ -894,6 +1026,21 @@ class ScanWorker(QtCore.QObject):
             t2 = time.time()
             pc, rf = self._read_both()
             pc = self._check_range(ib, iy, ix, pc, wait)
+            n_avg = int(getattr(self.s, "n_avg", 1) or 1)
+            if n_avg > 1:                        # several readings ~1 tau apart
+                pcs, rfs = [pc], [rf]
+                spacing = max(self._tau) if getattr(self, "_tau", None) else 0.0
+                for _ in range(n_avg - 1):
+                    if self._stop:
+                        break
+                    self._sleep(spacing)
+                    p_, r_ = self._read_both()
+                    pcs.append(p_)
+                    rfs.append(r_)
+                pc, sd_pc = _average(pcs)
+                rf, sd_rf = _average(rfs)
+                if d.pc_std is not None:
+                    d.pc_std[ib, iy, ix], d.refl_std[ib, iy, ix] = sd_pc, sd_rf
             t3 = time.time()
             self._t["move"] += t1 - t0
             self._t["wait"] += t2 - t1
@@ -1090,6 +1237,10 @@ class ScanWorker(QtCore.QObject):
             # again before every further map / line of a bias series (in the loop)
             set_each = bool(s.target_power_uW and self.pm is not None and outer != "power")
             if set_each:
+                first = s.outer_list()[0]
+                if outer == "bias" and first is not None:     # bias first, then power,
+                    self.status.emit(f"Ramping bias to {first:g} V")   # also for map 1
+                    hw.bias.ramp_to(first)
                 res = self._set_power(s, li_laser)
                 d.power_lock = {"power_set": res}
                 if res.get("aborted") or self._stop:
@@ -1140,6 +1291,10 @@ class ScanWorker(QtCore.QObject):
                     "sens_pc": hw.lockin_pc.sensitivity(),
                     "sens_refl": hw.lockin_refl.sensitivity(),
                     "overload_lines": 0}
+                try:                            # chopping frequency, read only
+                    d.map_info[ib]["chop_freq_Hz"] = float(hw.lockin_pc.frequency())
+                except Exception:
+                    pass
                 self._snapshot(ib, "start")
                 self._tau = (tau_pc, tau_r)
                 try:
@@ -1221,7 +1376,7 @@ class ScanWorker(QtCore.QObject):
                     self.status.emit(f"Map {ib + 1}/{nb}{label}, line {line + 1}/{ny}  ·  "
                                      + self._timing_text(line_s, nx))
                 self._snapshot(ib, "end")
-                d.save(self.path)  # autosave after each map
+                autosave(d, self.path, self.notify)  # after each map / line
             d.completed = not self._stop
             if any(b is not None for b in s.biases):
                 hw.bias.ramp_to(0.0)
@@ -1235,10 +1390,18 @@ class ScanWorker(QtCore.QObject):
         except InterruptedError:
             # stopped before any data was taken (laser power setting, fly-scan set-up)
             try:
+                if any(b is not None for b in s.biases):
+                    hw.bias.ramp_to(0.0)              # the first bias may have been set
+            except Exception:
+                pass
+            try:
                 if not np.isfinite(d.pc).any():
                     if os.path.exists(self.path):
                         os.remove(self.path)
                     folder = os.path.dirname(self.path)
+                    wp = os.path.splitext(self.path)[0] + "_where.png"
+                    if os.path.exists(wp):           # nothing measured: no picture
+                        os.remove(wp)
                     if os.path.isdir(folder) and not os.listdir(folder):
                         os.rmdir(folder)
             except OSError:
@@ -1266,6 +1429,15 @@ class ScanWorker(QtCore.QObject):
             if hasattr(self, "_pool"):
                 self._pool.shutdown(wait=True)
                 del self._pool
+            if getattr(self.s, "mode", "step") == "fly":     # an error during a fly move:
+                try:                                          # halt the stage first
+                    if hw.stage.is_moving():
+                        self._halt_stage(hw.stage)
+                except Exception:
+                    try:
+                        hw.stage.stop()
+                    except Exception:
+                        pass
             if getattr(self, "_vel0", None) is not None:
                 try:
                     hw.stage.set_velocity(self._vel0)

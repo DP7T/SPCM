@@ -18,7 +18,7 @@ from dataclasses import dataclass, field, asdict
 import numpy as np
 
 from scanner import (QtCore, CHANNELS, pc_scale, signal_kind, pixel_wait,
-                     set_laser_power, ramp_sine)
+                     set_laser_power, ramp_sine, autosave, SINE_STEP_V as SINE_STEP)
 
 KINDS = {"power": "Power sweep", "bias": "Bias sweep", "bias_power": "Bias × power sweep"}
 
@@ -36,6 +36,7 @@ class SweepSettings:
     y_stage: float = 0.0
     u: float = 0.0                  # same spot from the origin (0, 0), program axes
     v: float = 0.0
+    where_map: str = ""             # the map the spot was marked on (_where.png)
     settle_auto: bool = True
     settle_tc: float = 3.0
     extra_settle_ms: float = 0.0
@@ -47,12 +48,24 @@ class SweepSettings:
     sample: str = "sample"
     notes: str = ""
     conditions: dict = field(default_factory=dict)
+    # "finest": one point at every SINE OUT step (2 mV x every_steps) from p_from_uW up
+    # to p_to_uW instead of a list of target powers (point sweeps only)
+    finest: bool = False
+    p_from_uW: float = 1.0
+    p_to_uW: float = 10.0
+    every_steps: int = 1
+    both_ways: bool = False         # finest: measure on the way back down too
 
     def bias_list(self):
         return list(self.biases) if self.kind in ("bias", "bias_power") else [None]
 
     def power_list(self):
-        return list(self.powers_uW) if self.kind in ("power", "bias_power") else [None]
+        if self.kind not in ("power", "bias_power"):
+            return [None]
+        if self.finest:              # room for every step; trimmed to what was measured
+            n = int(self.max_amp_V / (SINE_STEP * max(int(self.every_steps), 1))) + 2
+            return [np.nan] * (n * (2 if self.both_ways else 1))
+        return list(self.powers_uW)
 
 
 class SweepData:
@@ -72,10 +85,22 @@ class SweepData:
         self.p_std_uW = np.full((nb, npw), np.nan)
         self.amp_V = np.full((nb, npw), np.nan)          # SINE OUT amplitude
         self.t_s = np.full((nb, npw), np.nan)
+        self.direction = np.zeros((nb, npw))             # finest: +1 going up, -1 down
         self.info = {}
         self.started = time.strftime("%Y-%m-%dT%H:%M:%S")
         self.completed = False
         self.path = None
+
+    def trim(self):
+        """Finest sweeps: drop the unused room at the end (columns never measured)."""
+        used = np.isfinite(self.t_s).any(axis=0)
+        if not used.any() or used.all():
+            return
+        n = int(np.nonzero(used)[0][-1]) + 1
+        for k in ("pc", "pc_std", "refl", "refl_std", "p_uW", "p_std_uW", "amp_V", "t_s",
+                  "direction"):
+            setattr(self, k, getattr(self, k)[:, :n])
+        self.powers = self.powers[:n]
 
     # ---- what to plot -------------------------------------------------
     def x_axis(self):
@@ -115,7 +140,8 @@ class SweepData:
         fac, unit, formula = pc_scale(s)
         unit = unit or s.lockin_unit
         kind = signal_kind(s)
-        with h5py.File(path, "w") as f:
+        from scanner import atomic_h5
+        with atomic_h5(path) as f:
             f.attrs["format"] = "SPCM point sweep v1"
             f.attrs["type"] = "point_sweep"
             f.attrs["sweep"] = s.kind
@@ -143,6 +169,12 @@ class SweepData:
             f["power_on_sample_std_uW"] = self.p_std_uW
             f["sine_amplitude_V"] = self.amp_V
             f["time_s"] = self.t_s
+            if s.finest:
+                f["direction"] = self.direction
+                f["direction"].attrs["note"] = "+1 = SINE OUT going up, -1 = going down"
+                f.attrs["finest"] = (f"every {s.every_steps} SINE OUT step(s) of 2 mV from "
+                                     f"{s.p_from_uW:g} to {s.p_to_uW:g} µW"
+                                     + (", up and down" if s.both_ways else ""))
             f.attrs["n_readings_per_point"] = s.n_avg
             for c, ch in enumerate(CHANNELS):
                 nm = ch if c < 3 else "theta_deg"
@@ -190,6 +222,14 @@ def load_sweep(path):
         known = set(SweepSettings.__dataclass_fields__)
         s = SweepSettings(**{k: v for k, v in st.items() if k in known})
         d = SweepData(s, json.loads(f["info"].attrs["instruments"]))
+        shape = f["raw/photocurrent_X"].shape            # as saved (finest: trimmed)
+        for k in ("pc", "pc_std", "refl", "refl_std"):
+            setattr(d, k, np.full(shape + (4,), np.nan))
+        d.powers = [None if not np.isfinite(p) else float(p) for p in f["power_set_uW"][()]] \
+            if s.kind in ("power", "bias_power") else d.powers
+        if s.finest:
+            d.powers = [np.nan] * shape[1]
+        d.direction = f["direction"][()] if "direction" in f else np.zeros(shape)
         for c, ch in enumerate(CHANNELS):
             nm = ch if c < 3 else "theta_deg"
             d.pc[..., c] = f[f"raw/photocurrent_{nm}"][()]
@@ -223,7 +263,7 @@ def export_csv(d):
     fac, unit, formula = pc_scale(s)
     unit = unit or s.lockin_unit
     cols = ["bias_V", "power_set_uW", "power_on_sample_uW", "power_std_uW",
-            "sine_amplitude_V", "time_s"]
+            "sine_amplitude_V", "time_s"] + (["direction"] if s.finest else [])
     for name, u in (("photocurrent", unit), ("reflection", "V")):
         for ch in CHANNELS:
             uu = "deg" if ch == "theta" else u
@@ -231,8 +271,12 @@ def export_csv(d):
     rows = []
     for ib, b in enumerate(d.biases):
         for ip, p in enumerate(d.powers):
+            if s.finest and not np.isfinite(d.t_s[ib, ip]):
+                continue                          # finest: a row ended earlier
             r = [np.nan if b is None else b, np.nan if p is None else p,
                  d.p_uW[ib, ip], d.p_std_uW[ib, ip], d.amp_V[ib, ip], d.t_s[ib, ip]]
+            if s.finest:
+                r.append(d.direction[ib, ip])
             for arr, sd, k in ((d.pc, d.pc_std, fac), (d.refl, d.refl_std, 1.0)):
                 for c in range(4):
                     kk = k if c < 3 else 1.0
@@ -253,15 +297,25 @@ def export_csv(d):
         fh.write(f"Position: ({s.u:.3f}, {s.v:.3f}) µm from the origin = stage "
                  f"({s.x_stage:.3f}, {s.y_stage:.3f}) µm\n")
         fh.write(f"Photocurrent conversion: {formula} [{unit}]\n")
+        if getattr(s, "where_map", ""):
+            fh.write(f"Spot marked on the map: {s.where_map} (picture: _where.png)\n")
         fh.write(f"Each point: mean of {s.n_avg} readings; *_std = their standard "
                  "deviation\n")
+        if s.finest:
+            fh.write(f"Finest: a point at every {s.every_steps} SINE OUT step(s) of 2 mV, "
+                     f"from {s.p_from_uW:g} to {s.p_to_uW:g} µW"
+                     + (", up and then down (direction +1 / -1)" if s.both_ways else "")
+                     + "; power_set_uW is empty, the x-axis is power_on_sample_uW\n")
         fh.write("sweep.csv: numbers only, one row per point. Columns:\n")
         for i, c in enumerate(cols, 1):
             fh.write(f"  {i}: {c}\n")
         if s.kind == "bias_power":
+            cols_txt = ("one column per SINE OUT step (power on sample: see "
+                        "power_on_sample_uW in sweep.csv)" if s.finest else
+                        f"one column per set power ({', '.join(f'{p:g}' for p in d.powers)} µW)")
             fh.write(f"photocurrent_X_matrix.csv: numbers only, {signal_kind(s)} X in "
                      f"{unit}; one row per bias ({', '.join(f'{b:g}' for b in d.biases)} V), "
-                     f"one column per set power ({', '.join(f'{p:g}' for p in d.powers)} µW)\n")
+                     f"{cols_txt}\n")
         for ib, r in enumerate(d.fits(0)):
             if r:
                 b = d.biases[ib]
@@ -275,6 +329,12 @@ def export_csv(d):
         for k, v in asdict(s).items():
             if k not in ("conditions", "notes"):
                 fh.write(f"  {k}: {v}\n")
+        nr = (d.info or {}).get("powers_not_reached")
+        if nr:
+            fh.write("\nPowers NOT reached (SINE OUT at its limit; the first one was "
+                     "measured at the highest power possible, higher ones skipped): "
+                     + ", ".join(f"{x['power_uW']:g} µW" + ("" if x.get("bias_V") is None
+                                 else f" at {x['bias_V']:g} V") for x in nr) + "\n")
         fh.write(f"\nLock-ins: {json.dumps(d.info, default=float)}\n")
         fh.write(f"Instruments: {json.dumps(d.hw_info)}\n")
     return out
@@ -324,7 +384,8 @@ def save_figure(d, path, channel=0, dpi=200):
     ylab = f"{kind} {ch} ({pre}{unit})"
     plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 11})
     nb = len(d.biases)
-    colors = plt.cm.viridis(np.linspace(0, 0.9, max(nb, 1)))
+    from figures import series_key, add_series_bar
+    colors, sm = series_key(list(d.biases))
     fits = d.fits(channel)
     where = f"({s.u:.2f}, {s.v:.2f}) µm"
 
@@ -372,14 +433,27 @@ def save_figure(d, path, channel=0, dpi=200):
         a_log.set_ylabel(f"|{kind} {ch}| ({pre}{unit})")
         a_lin.set_title(f"{kind} vs power at {where}", fontsize=11)
         a_log.set_title("log-log, fit |S| = A·P$^α$", fontsize=11)
-        if nb > 1 or any(fits):
-            a_log.legend(fontsize=8, title="Bias" if s.kind == "bias_power" else None,
-                         title_fontsize=8)
-        if nb > 1:
-            a_lin.legend(fontsize=8, title="Bias", title_fontsize=8)
+        if sm is not None:                     # many biases: colour bar, no legend
+            add_series_bar(fig, [a_lin, a_log], sm, "Bias (V)")
+        else:
+            if nb > 1 or any(fits):
+                a_log.legend(fontsize=8, title="Bias" if s.kind == "bias_power" else None,
+                             title_fontsize=8)
+            if nb > 1:
+                a_lin.legend(fontsize=8, title="Bias", title_fontsize=8)
         if s.kind == "bias_power":
             ax = axes[2]
             pw = np.array(d.powers, float)
+            if s.finest or not np.isfinite(pw).all():     # finest: measured, per column
+                pw = np.nanmean(d.p_uW, axis=0)
+                ok = np.isfinite(pw)
+                pw = pw[ok]
+                sig, sd = sig[:, ok], sd[:, ok]
+                if s.both_ways:                           # map of the way up only
+                    up = np.nanmax(d.direction[:, ok], axis=0) >= 0
+                    pw, sig = pw[up], sig[:, up]
+                order_p = np.argsort(pw)
+                pw, sig = pw[order_p], sig[:, order_p]
             log = bool(np.all(pw > 0) and pw.max() / pw.min() > 10)
             bx = np.array(d.biases, float)
             order = np.argsort(bx)
@@ -390,7 +464,8 @@ def save_figure(d, path, channel=0, dpi=200):
             if log:
                 ax.set_xscale("log")
                 _plain_log_ticks(ax.xaxis)
-            ax.set_xlabel("Power on sample, set (µW)")
+            ax.set_xlabel("Power on sample, measured (µW)" if s.finest
+                          else "Power on sample, set (µW)")
             ax.set_ylabel("Bias (V)")
             ax.set_title(f"{kind} {ch}", fontsize=11)
             cb = fig.colorbar(pcm, ax=ax)
@@ -471,9 +546,9 @@ class SweepWorker(QtCore.QObject):
                                  "info")
                 self._sleep(self._wait)
                 return self._measure(ib, ip, spacing)
-        d.pc[ib, ip], d.refl[ib, ip] = pcs.mean(0), rfs.mean(0)
-        d.pc_std[ib, ip] = pcs.std(0, ddof=1) if len(pcs) > 1 else 0.0
-        d.refl_std[ib, ip] = rfs.std(0, ddof=1) if len(rfs) > 1 else 0.0
+        from scanner import _average        # theta from the mean X, Y (not the mean
+        d.pc[ib, ip], d.pc_std[ib, ip] = _average(pcs)        # of the angles: ±180°)
+        d.refl[ib, ip], d.refl_std[ib, ip] = _average(rfs)
         if np.isfinite(ps).any():
             d.p_uW[ib, ip] = np.nanmean(ps)
             d.p_std_uW[ib, ip] = np.nanstd(ps, ddof=1) if np.isfinite(ps).sum() > 1 else 0.0
@@ -486,6 +561,7 @@ class SweepWorker(QtCore.QObject):
         li = hw.lockin_refl if s.laser_lockin == "reflection" else hw.lockin_pc
         amp0 = None
         use_bias = any(b is not None for b in biases)
+        skipped = []                     # powers not reached (completed = False then)
         try:
             if any(p is not None for p in powers):
                 if self.pm is None:
@@ -521,11 +597,20 @@ class SweepWorker(QtCore.QObject):
                     self.status.emit(f"Ramping bias to {b:g} V")
                     hw.bias.ramp_to(b)
                     self._sleep(wait)
+                if s.finest and s.kind in ("power", "bias_power"):
+                    self._finest_row(ib, b, li, wait, spacing, t0)
+                    autosave(d, self.path, self.notify)
+                    continue
+                unreach = None                  # lowest power found out of reach (row)
                 for ip, p in enumerate(powers):
                     if self._stop:
                         break
                     where = ("" if b is None else f"{b:g} V") + \
                             ("" if p is None else (", " if b is not None else "") + f"{p:g} µW")
+                    if p is not None and unreach is not None and p >= unreach:
+                        skipped.append({"bias_V": b, "power_uW": p})   # higher: no try
+                        done += 1
+                        continue
                     if p is not None:
                         res = set_laser_power(self.pm, li, p * 1e-6, 0,   # closest 2 mV step
                                               s.max_amp_V, status=self.status.emit,
@@ -538,11 +623,15 @@ class SweepWorker(QtCore.QObject):
                                                           "Laser power not set")):
                                 if res["message"].startswith("Laser power not set"):
                                     raise RuntimeError(res["message"])
-                                # higher powers in this row are out of reach too
+                                # higher powers in this row are out of reach too;
+                                # lower ones later in the list are still tried
                                 d.amp_V[ib, ip] = res["amplitude_V"]
                                 self._measure_point(ib, ip, wait, spacing, where)
-                                done += len(powers) - ip
-                                break
+                                skipped.append({"bias_V": b, "power_uW": p,
+                                                "measured_at_max_sine": True})
+                                unreach = p
+                                done += 1
+                                continue
                         d.amp_V[ib, ip] = res["amplitude_V"]
                     elif amp0 is not None:
                         d.amp_V[ib, ip] = amp0
@@ -550,9 +639,13 @@ class SweepWorker(QtCore.QObject):
                     done += 1
                     el = time.time() - t0
                     self.progress.emit(done, total, el / done * (total - done))
-                d.save(self.path)                # autosave after every bias row
-            d.completed = not self._stop
+                autosave(d, self.path, self.notify)   # after every bias row
+            if skipped:
+                d.info["powers_not_reached"] = skipped
+            d.completed = not self._stop and not skipped
             self._finish(li, amp0, use_bias)
+            if s.finest:
+                d.trim()
             d.save(self.path)
             self.finished.emit(self.path)
         except Exception:
@@ -570,6 +663,60 @@ class SweepWorker(QtCore.QObject):
                 hw.stage.set_joystick(True)
             except Exception:
                 pass
+
+    def _finest_row(self, ib, b, li, wait, spacing, t0):
+        """One row of a finest sweep: set the power to 'from' (2 mV steps, one
+        direction), then go up one SINE OUT step (2 mV x every) at a time and measure at
+        every step until the power on the sample reaches 'to' (or the SINE OUT limit);
+        optionally come back down the same way, measuring too."""
+        s, d = self.s, self.data
+        step = SINE_STEP * max(int(s.every_steps), 1)
+        tag = "" if b is None else f"{b:g} V, "
+        res = set_laser_power(self.pm, li, s.p_from_uW * 1e-6, 0, s.max_amp_V,
+                              status=self.status.emit, stop=lambda: self._stop)
+        if res.get("aborted") or self._stop:
+            return
+        if res["message"].startswith("Laser power not set"):
+            raise RuntimeError(res["message"])
+        amp = res["amplitude_V"]
+        amp_start, ip, nb = amp, 0, len(d.biases)
+        cap = d.pc.shape[1]
+        span = max(s.p_to_uW - s.p_from_uW, 1e-12)
+
+        def point(direction):
+            nonlocal ip
+            d.amp_V[ib, ip] = amp
+            d.direction[ib, ip] = direction
+            self._measure_point(ib, ip, wait + 0.05 + 0.003 * (getattr(self.pm, "averages", 10)
+                                                              or 10),
+                                spacing, f"{tag}SINE {amp:.3f} V")
+            p_now = d.p_uW[ib, ip]
+            frac = 0.0 if not np.isfinite(p_now) else min(max(
+                (p_now - s.p_from_uW) / span, 0.0), 1.0)
+            if s.both_ways:
+                frac = frac / 2 if direction > 0 else 1 - frac / 2
+            done = ib + frac
+            el = time.time() - t0
+            self.progress.emit(int(done * 1000), nb * 1000,
+                               el / max(done, 1e-3) * (nb - done))
+            ip += 1
+            return p_now
+
+        p_now = point(+1)                                       # at 'from'
+        while not self._stop and ip < cap:                     # up, one step at a time
+            if np.isfinite(p_now) and p_now >= s.p_to_uW:
+                break
+            new = amp + step
+            if new > s.max_amp_V + 1e-9:
+                self.notify.emit(f"{tag}SINE OUT limit {s.max_amp_V:g} V reached at "
+                                 f"{p_now:.3g} µW (below {s.p_to_uW:g} µW)", "warn")
+                break
+            amp = li.set_sine_amplitude(new)
+            p_now = point(+1)
+        if s.both_ways and not self._stop:                     # and back down, measuring
+            while not self._stop and ip < cap and amp - step >= amp_start - 1e-9:
+                amp = li.set_sine_amplitude(amp - step)
+                point(-1)
 
     def _measure_point(self, ib, ip, wait, spacing, where):
         self.status.emit(f"{where}: waiting for the lock-ins to settle…")
