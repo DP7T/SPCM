@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.2.16 (in testing)
+## 1.2.16 (2026-10-25)
 Bug fixes only (from an outside code review), each with a self-test:
 - The program crashed at start **without a camera** (camera off or not found) since 1.2.11
 - Map series with a value twice (e.g. bias `0, 1, 0`): the third map's PNG / CSV no longer
