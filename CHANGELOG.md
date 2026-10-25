@@ -1,6 +1,27 @@
 # Changelog
 
-## 1.2.15 (in testing)
+## 1.2.16 (in testing)
+Bug fixes only (from an outside code review), each with a self-test:
+- The program crashed at start **without a camera** (camera off or not found) since 1.2.11
+- Map series with a value twice (e.g. bias `0, 1, 0`): the third map's PNG / CSV no longer
+  overwrites the first (`…_+0V` and `…_+0V_2`)
+- Bias series with "Set the laser power": the first map's power is now set **after** its
+  bias, like all the others; Stop during that first power setting ramps the bias back to 0
+- Fly scan: a read error during a line now halts the stage
+- Autofocus: a single z limit (only `z_max` or only `z_min`) is no longer ignored
+- Restart / Hardware settings are refused while autofocus, camera calibration or a power
+  setting runs (before, only a measurement blocked it)
+- File → Open is refused during a measurement (it mixed up the live display)
+- Auto-range changes and the lock-in filter slopes are now saved in the map / line .h5
+- Quick I–V: a failed autosave only warns, the I–V goes on; an I–V stopped by an overrange
+  is no longer marked complete
+- Point sweep: an unreachable power no longer skips the lower powers after it in the list;
+  such a sweep is marked not complete and info.txt lists the powers not reached
+- Phase-corrected copy of averaged line scans: the error bars now turn with the signal
+- Point sweep: θ is the phase of the mean X, Y (averaging +179° and −179° gave 0°)
+- The phase window re-saves in the background after the substrate tick
+
+## 1.2.15 (pre-release)
 - **New file names, made by the program:** `date_time_sample_wavelength_type_details`,
   e.g. `20261024_1432_flakeA_532nm_map_20x20um_500nm_10uW`. Sorting by name now gives
   the order you measured in, for every type (map, line, point, IV). Wavelength from the

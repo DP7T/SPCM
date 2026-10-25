@@ -57,6 +57,17 @@ def fresh_frame(cam, n=2, timeout=5.0):
     return img
 
 
+def z_limits(limits):
+    """(z_min, z_max) from the settings, either may be missing -> both as numbers:
+    a missing one is no limit on that side (before, one missing dropped both)."""
+    lo, hi = (tuple(limits) + (None, None))[:2] if limits else (None, None)
+    lo = -np.inf if lo is None else float(lo)
+    hi = np.inf if hi is None else float(hi)
+    if lo > hi:
+        raise ValueError(f"Autofocus limits: z_min {lo} is above z_max {hi} (config.yaml).")
+    return lo, hi
+
+
 def run_autofocus(stage, cam, spot_xy, range_um=5.0, step_um=0.5,
                   backlash_um=2.0, z_limits=None, status=None, stop=None):
     """Returns dict(z_start, z_best, ok, message, z, metric).

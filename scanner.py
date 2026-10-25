@@ -409,7 +409,11 @@ class ScanData:
                     g.attrs["series"] = f"{olabel} ({ounit})"
                     g.attrs["series_value"] = np.nan if b is None else b
                 for k, v in (self.map_info[ib] or {}).items():
-                    if v is not None and not isinstance(v, (list, dict)):
+                    if v is None:
+                        continue
+                    if isinstance(v, (list, dict)):       # range changes, filter slopes
+                        g.attrs[k] = "json:" + json.dumps(v)
+                    else:
                         g.attrs[k] = v
                 g["x_um"], g["y_um"] = ux[ix], vy[iy]
                 g.attrs["angle_deg"] = getattr(s, "angle_deg", 0.0)
@@ -600,8 +604,16 @@ def load(path):
                     for c, ch in enumerate(CHANNELS[:3]):
                         d.pc_std[ib, :, :, c] = g[f"photocurrent_{ch}_std"][()] / fac_
                         d.refl_std[ib, :, :, c] = g[f"reflection_{ch}_std"][()]
-                d.map_info.append({k: (v.item() if hasattr(v, "item") else v)
-                                   for k, v in g.attrs.items()})
+                mi = {}
+                for k, v in g.attrs.items():
+                    v = v.item() if hasattr(v, "item") else v
+                    if isinstance(v, str) and v.startswith("json:"):
+                        try:
+                            v = json.loads(v[5:])
+                        except ValueError:
+                            pass
+                    mi[k] = v
+                d.map_info.append(mi)
                 for when in ("start", "end"):
                     pm = {k[len("laser_"):-len(when) - 1]: g.attrs[k] for k in g.attrs
                           if k.startswith("laser_") and k.endswith("_" + when)}
@@ -1225,6 +1237,10 @@ class ScanWorker(QtCore.QObject):
             # again before every further map / line of a bias series (in the loop)
             set_each = bool(s.target_power_uW and self.pm is not None and outer != "power")
             if set_each:
+                first = s.outer_list()[0]
+                if outer == "bias" and first is not None:     # bias first, then power,
+                    self.status.emit(f"Ramping bias to {first:g} V")   # also for map 1
+                    hw.bias.ramp_to(first)
                 res = self._set_power(s, li_laser)
                 d.power_lock = {"power_set": res}
                 if res.get("aborted") or self._stop:
@@ -1374,6 +1390,11 @@ class ScanWorker(QtCore.QObject):
         except InterruptedError:
             # stopped before any data was taken (laser power setting, fly-scan set-up)
             try:
+                if any(b is not None for b in s.biases):
+                    hw.bias.ramp_to(0.0)              # the first bias may have been set
+            except Exception:
+                pass
+            try:
                 if not np.isfinite(d.pc).any():
                     if os.path.exists(self.path):
                         os.remove(self.path)
@@ -1408,6 +1429,15 @@ class ScanWorker(QtCore.QObject):
             if hasattr(self, "_pool"):
                 self._pool.shutdown(wait=True)
                 del self._pool
+            if getattr(self.s, "mode", "step") == "fly":     # an error during a fly move:
+                try:                                          # halt the stage first
+                    if hw.stage.is_moving():
+                        self._halt_stage(hw.stage)
+                except Exception:
+                    try:
+                        hw.stage.stop()
+                    except Exception:
+                        pass
             if getattr(self, "_vel0", None) is not None:
                 try:
                     hw.stage.set_velocity(self._vel0)

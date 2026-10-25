@@ -450,10 +450,10 @@ class AutofocusWorker(QtCore.QObject):
 
     def run(self):
         import traceback
-        from autofocus import run_autofocus
+        from autofocus import run_autofocus, z_limits
         stage, cam, spot, rng, step, backlash, limits = self.args
-        lim = None if None in limits else limits
         try:
+            lim = z_limits(limits)     # one limit alone still counts
             stage.set_joystick(False)
             r = run_autofocus(stage, cam, spot, rng, step, backlash, lim,
                               status=self.status.emit, stop=lambda: self._stop)
@@ -627,6 +627,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.af_thread = self.af_worker = None
         self.cam = self.accessory("camera")
+        # camera state exists even without a camera (the camera tab may not be built)
+        self.cam_tab = self.cam_plot = None
+        self.cam_rois, self.cam_line = [], []
+        self.cal = None
         if self.cam is not None and getattr(hw.stage, "has_z", False):
             af = config.get("autofocus", {}) or {}
             g = QtWidgets.QGroupBox("Focus (z)")
@@ -1154,16 +1158,22 @@ class MainWindow(QtWidgets.QMainWindow):
         QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(os.path.abspath(path)))
 
     def open_settings(self):
-        if self.thread is not None:
-            self.error("Stop the scan before changing the hardware settings.")
+        if self._busy():
+            self.error("Stop what is running (measurement, autofocus, camera calibration "
+                       "or power setting) before changing the hardware settings.")
             return
         from settings_dialog import SettingsDialog
         if SettingsDialog(self.config, self.config_path, self).exec():
             self.do_restart(False)
 
     def do_restart(self, simulate):
-        if self.thread is not None:
-            self.error("Stop the scan first.")
+        if self._busy():          # scan, autofocus, calibration or power setting running
+            self.error("Something is still running (measurement, autofocus, camera "
+                       "calibration or power setting). Stop it first, then restart.")
+            return
+        if self._saving():
+            self.error("The last measurement is still being saved (CSV, figures). "
+                       "Wait a moment, then restart.")
             return
         if self._restart is None:
             return
@@ -3699,7 +3709,12 @@ class MainWindow(QtWidgets.QMainWindow):
             s.file_name = final
             if maps:
                 sfx = final[len(name):]               # '_2' if the name was taken
-                s.map_names = [m + sfx for m in maps]
+                out, seen = [], {}
+                for m in maps:                        # a value used twice (0, 1, 0) or
+                    k = seen.get(m, 0) + 1            # rounded alike: _2, _3 ... so no
+                    seen[m] = k                       # map's PNG / CSV overwrites another
+                    out.append(m + sfx + (f"_{k}" if k > 1 else ""))
+                s.map_names = out
             else:
                 s.map_names = [final]
         return final
@@ -4089,6 +4104,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self.error(f"CSV export failed:\n{e}")
 
     def open_file(self):
+        if self.thread is not None:     # the live display belongs to the measurement
+            self.error("A measurement is running. Open saved files when it has finished "
+                       "(the live maps and plots are needed for it until then).")
+            return
         path, _ = QtWidgets.QFileDialog.getOpenFileName(
             self, "Open scan", self.folder.text(), "HDF5 (*.h5)")
         if path:
@@ -4510,11 +4529,13 @@ class PhaseDialog(QtWidgets.QDialog):
         res = dict(self.res)
         if not self.bg.isChecked():
             res["offset"], res["subtract_background"], res["background_from"] = [0.0, 0.0], False, ""
-        try:
-            self.saved = phase.write_copy(self.d, res)
-            self.win._remember_angle(res["phase_deg"])
-        except Exception as e:
-            self.win.toast(f"Could not save the corrected copy: {e}", "warn")
+        d, win = self.d, self.win
+
+        def finish(path):                      # saved in the background (no freezing)
+            self.saved = path
+            win._remember_angle(res["phase_deg"])
+            self._status()
+        win._post("the phase-corrected copy", lambda: phase.write_copy(d, res), finish)
 
 
 class CursorDialog(QtWidgets.QDialog):

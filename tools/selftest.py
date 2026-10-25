@@ -175,6 +175,7 @@ def _():
         w = ScanWorker(HW, s, OUT)
         run_worker(w)
         assert len(calls) == 3, calls            # once per bias
+        assert np.allclose(calls, [-0.2, 0.0, 0.3]), f"power set at the wrong bias: {calls}"
         assert all("laser_power_reached_uW" in m for m in w.data.map_info), w.data.map_info
         calls.clear()
         ls = line_settings((-8, -6), (-5, -6), 1.0, biases=[-0.2, 0.3],
@@ -182,6 +183,7 @@ def _():
                            sample="selftest_line_bias_power")
         run_worker(ScanWorker(HW, ls, OUT))
         assert len(calls) == 2, calls
+        assert np.allclose(calls, [-0.2, 0.3]), f"line: power set at the wrong bias: {calls}"
     finally:
         scanner.set_laser_power = orig
 
@@ -211,6 +213,10 @@ def _():
             print(f"      {mode}: {len(ch)} range change(s), now {fs * 1e9:g} nV, "
                   f"max signal {top / fs * 100:.0f} % of full scale")
             assert ch and top <= 0.8 * fs, (mode, ch, top, fs)
+            from scanner import load as _ld
+            mi = _ld(w.path).map_info[0]                # saved in the .h5 and read back
+            assert mi.get("range_changes") == ch and isinstance(mi.get("slope_poles"), list), \
+                ("range history not saved", mi)
         li.set_sens_index(0)
         HW.stage.move_to(-5, 0.5)                     # a spot with signal
         ss = sweeps.SweepSettings(kind="power", powers_uW=[30, 80], n_avg=2, x_stage=-5,
@@ -255,6 +261,14 @@ def _():
     assert abs(r2["offset"][0] - bx) < 0.1 * abs(bx) and abs(r2["phase_deg"] - 12) < 2, r2
     phase.remove_copy(d.path)
     assert not os.path.exists(p)
+    # error bars (readings per point) turn with the signal: at 90° X and Y swap
+    import copy as _copy
+    dd = _copy.deepcopy(d)
+    dd.pc_std = np.zeros_like(dd.pc)
+    dd.pc_std[..., 0], dd.pc_std[..., 1] = 1.0, 3.0
+    cc = phase.make_copy(dd, {"phase_deg": 90.0})
+    assert np.allclose(cc.pc_std[..., 0], 3.0) and np.allclose(cc.pc_std[..., 1], 1.0), \
+        "error bars not rotated"
     # a strong spike with a random phase: ignored, angle and sign unchanged
     Xs, Ys = X.copy(), Y.copy()
     big = 3 * np.nanmax(np.hypot(X, Y))
@@ -451,6 +465,27 @@ def _():
     w.pixel.connect(press_stop)
     run_worker(w)
     assert halted and halted[0] is False, "stage was not halted after Stop"
+    # a read error in the middle of a fly line: the stage is halted too
+    s2 = ScanSettings(x_center=-8, y_center=-6, x_size=16, y_size=20, step=1.0,
+                      serpentine=False, mode="fly", origin_x=0, origin_y=0,
+                      sample="selftest_fly_error")
+    w2 = ScanWorker(HW, s2, OUT)
+    lines = []
+
+    def broken(ib, iy, *_):
+        if iy not in lines:
+            lines.append(iy)
+        if len(lines) == 2:
+            def fail():
+                raise IOError("simulated GPIB read error")
+            w2._read_both = fail
+    w2.pixel.connect(broken)
+    try:
+        run_worker(w2)
+        raise AssertionError("the read error was not reported")
+    except RuntimeError as e:
+        assert "simulated GPIB read error" in str(e), e
+    assert not HW.stage.is_moving(), "stage still moving after a fly-scan error"
 
 
 @check("series of maps over laser power (2 mV steps), SINE OUT back")
@@ -534,6 +569,56 @@ def _():
           "old file intact")
 
 
+@check("point sweep: an unreachable power doesn't skip lower ones after it")
+def _():
+    import sweeps
+    HW.stage.move_to(-5, 0.5)
+    HW.lockin_pc.set_sine_amplitude(1.0)
+    s = sweeps.SweepSettings(kind="power", powers_uW=[100000, 30], n_avg=2, x_stage=-5,
+                             y_stage=0.5, u=5, v=0.5, max_amp_V=2.0,
+                             sample="selftest_unreachable")
+    d = sweeps.load_sweep(run_worker(sweeps.SweepWorker(HW, s, OUT)))
+    assert np.isfinite(d.pc[0, 1, 0]), "the reachable 30 µW point was skipped"
+    assert not d.completed and d.info.get("powers_not_reached"), d.info
+    sweeps.export_csv(d)
+    HW.lockin_pc.set_sine_amplitude(1.0)
+
+
+@check("averaging: the phase of readings near ±180° is the phase of the mean X, Y")
+def _():
+    from scanner import _average
+    r = np.array([[-1.0, 0.0175, 1.0, 179.0], [-1.0, -0.0175, 1.0, -179.0]])
+    m, sd = _average(r)
+    assert abs(abs(m[3]) - 180.0) < 0.01, m          # not 0°
+    import inspect
+    import sweeps
+    assert "_average(pcs)" in inspect.getsource(sweeps.SweepWorker), "sweep not using it"
+
+
+@check("autofocus: one z limit alone is kept")
+def _():
+    import autofocus
+    assert autofocus.z_limits((None, 100.5)) == (-np.inf, 100.5)
+    assert autofocus.z_limits((99.0, None)) == (99.0, np.inf)
+    assert autofocus.z_limits(None) == (-np.inf, np.inf)
+    cam = next(a for a in HW.accessories if a.name == "camera")
+    HW.stage.move_z(101.0)
+    zs = []
+    orig = HW.stage.move_z
+
+    def spy(z, *a, **k):
+        zs.append(z)
+        return orig(z, *a, **k)
+    HW.stage.move_z = spy
+    try:
+        autofocus.run_autofocus(HW.stage, cam, (240, 180), range_um=2.0, step_um=0.5,
+                                z_limits=autofocus.z_limits((None, 101.2)))
+    finally:
+        HW.stage.move_z = orig
+    assert zs and max(zs) <= 101.2 + 1e-9, f"went above z_max: {max(zs)}"
+    HW.stage.move_z(101.7)
+
+
 @check("camera calibration (simulated)")
 def _():
     import calibration
@@ -562,6 +647,19 @@ def _():
     assert 1e-7 < a[k, 1] < 1e-6, a[k]              # simulated device: ~0.27 µA at 0.5 V
     ft = iv.fit_line(a)
     assert ft and np.isfinite(ft["R_ohm"]) and ft["R_ohm"] > 0, ft
+    # an autosave that fails once (file open elsewhere): the I-V goes on to the end
+    w = iv.IVWorker(HW, s, OUT, name="selftest_iv_autosave")
+    real = w.data.save
+    fails = [1]
+
+    def flaky(path):
+        if fails and len(w.data.rows) < len(pts):
+            fails.pop()
+            raise PermissionError("simulated: file open in another program")
+        return real(path)
+    w.data.save = flaky
+    d2 = iv.load_iv(run_worker(w))
+    assert d2.completed and len(d2.rows) == len(pts), (len(d2.rows), len(pts))
     import tempfile
     import naming
     tmp = tempfile.mkdtemp()
@@ -660,7 +758,10 @@ if HAVE_QT:
         t_copy = os.path.getmtime(pd.saved)
         pump(1.1)
         pd.bg.setChecked(True)                    # substrate box: saved again by itself
-        pump(0.5)
+        pump(0.3)
+        t0 = time.time()
+        while w._saving() and time.time() - t0 < 60:    # in the background
+            pump(0.2)
         assert os.path.getmtime(pd.saved) > t_copy, "copy not re-saved after the substrate tick"
         assert not hasattr(pd, "save_btn") and not hasattr(pd, "del_btn"), "save buttons back"
         pd.grab().save(os.path.join(OUT, "screen_phase_dialog_substrate.png"))
@@ -721,6 +822,11 @@ if HAVE_QT:
         assert nm_.endswith("_-1to1V") and per_ and per_[1].endswith("_-0.5V") and \
             "-1to1V" not in per_[1], (nm_, per_)
         print(f"      bias series: {nm_} -> map 2: {per_[1]}")
+        w.ser_vals.setText("0, 1, 0")                 # a value twice: no overwriting
+        st2 = w.settings()
+        w.measurement_name("map", st2)
+        assert len(set(st2.map_names)) == 3 and st2.map_names[2].endswith("_+0V_2"), \
+            st2.map_names
         w.ser_kind.setCurrentIndex(0)
         w.ser_vals.setText("")
         w.amp_mode.setCurrentIndex(amp0)
@@ -934,6 +1040,42 @@ if HAVE_QT:
         assert disk["camera"]["flip_x"] is False and disk["save_dir"] == "data", disk
         w._hw_closed = True          # keep the simulated hardware for later tests
         w.close()
+
+    @check("window without camera and power meter (both optional)")
+    def _():
+        from pyqtgraph.Qt import QtWidgets
+        import gui
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        acc = HW.accessories
+        HW.accessories = []
+        try:
+            cfg = dict(CFG)
+            cfg["save_dir"] = OUT
+            w = gui.MainWindow(HW, cfg, None)
+            w.show()
+            t0 = time.time()
+            while time.time() - t0 < 1.5:
+                app.processEvents()
+                time.sleep(0.02)
+            w._poll_position()
+            w._update_preview()
+            w._name_changed()
+            assert w.cam_tab is None and w.pm is None
+            # restart refused while e.g. autofocus runs (instruments stay open)
+            closed = []
+            w._restart = lambda sim: closed.append("restart")
+            w.af_thread = object()
+            errs = []
+            w.error = errs.append
+            w.do_restart(True)
+            assert not closed and errs, "restart went ahead during autofocus"
+            w.af_thread = None
+            print("      starts without camera and power meter; next map: "
+                  + w.name_prev["map"].text().replace("\u200b", ""))
+            w._hw_closed = True
+            w.close()
+        finally:
+            HW.accessories = acc
 
 
 print()

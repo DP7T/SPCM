@@ -338,9 +338,10 @@ class IVWorker(QtCore.QObject):
                     break
                 el = time.time() - t0
                 self.progress.emit(k + 1, len(pts), el / (k + 1) * (len(pts) - k - 1))
-                if k % 25 == 24:
-                    d.save(self.path)
-            d.completed = len(d.rows) == len(pts)
+                if k % 25 == 24:                 # a failed autosave only warns
+                    from scanner import autosave
+                    autosave(d, self.path, self.notify)
+            d.completed = len(d.rows) == len(pts) and not d.stop_reason
             self.status.emit("Ramping bias back to 0 V")
             hw.bias.ramp_to(0.0)
             d.save(self.path)

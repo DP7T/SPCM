@@ -117,6 +117,13 @@ the real hardware and report back with screenshots. Write in plain language for 
 - Cursors (1.2.6): Draw ▾ → Point / Line cursor, mirrored on both maps (`_mirror`), values in `CursorDialog`; nearest pixel only, line at the scan step, all maps of a series, raw + corrected.
 - Phase window (1.2.6): Phase-lag view (`phase.lag_map`; µs from `chop_freq_Hz`, read with `FREQ?`). **Rejected by the user (2026-10-21):** phase memory per sample, the start hint, reading/saving the lock-in PHASE and the `{phase}` name field. That code is kept only on the branch `phase-memory-1.2.6`; don't bring it back without asking.
 
+## Lessons from the 1.2.15 review (keep)
+- Optional hardware (camera, power meter) may be missing: every attribute used outside its tab must exist without it (`cam_tab`, `cam_rois`, `cal` … set in `__init__`); the self-test has a window run without accessories.
+- Every hardware worker counts for `_busy()`; restart / settings / File → Open check it.
+- Per-map file names must be unique within a series (repeated values get `_2`).
+- `map_info` lists/dicts are saved as `json:` attributes.
+- All autosaves (maps, sweeps, I–V) go through `scanner.autosave`.
+
 ## How to test without hardware
 
 ```

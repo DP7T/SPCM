@@ -227,6 +227,14 @@ def make_copy(d, res):
     c.pc[..., 0], c.pc[..., 1] = Xr / fac, Yr / fac
     c.pc[..., 2] = np.hypot(Xr, Yr) / fac
     c.pc[..., 3] = np.degrees(np.arctan2(Yr, Xr))
+    if getattr(d, "pc_std", None) is not None:      # error bars rotate with the signal
+        phi = np.radians(res["phase_deg"])
+        cs, sn = np.cos(phi), np.sin(phi)
+        sx, sy = d.pc_std[..., 0], d.pc_std[..., 1]
+        c.pc_std = d.pc_std.copy()
+        # X and Y spreads taken as independent (the covariance was not recorded)
+        c.pc_std[..., 0] = np.sqrt((cs * sx) ** 2 + (sn * sy) ** 2)
+        c.pc_std[..., 1] = np.sqrt((sn * sx) ** 2 + (cs * sy) ** 2)
     c.phase = {k: res[k] for k in ("phase_deg", "phase_err_deg", "offset", "noise",
                                    "n_signal", "n_rejected", "spread", "subtract_background",
                                    "background_from", "sign_rule", "message") if k in res}

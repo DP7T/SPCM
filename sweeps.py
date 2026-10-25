@@ -329,6 +329,12 @@ def export_csv(d):
         for k, v in asdict(s).items():
             if k not in ("conditions", "notes"):
                 fh.write(f"  {k}: {v}\n")
+        nr = (d.info or {}).get("powers_not_reached")
+        if nr:
+            fh.write("\nPowers NOT reached (SINE OUT at its limit; the first one was "
+                     "measured at the highest power possible, higher ones skipped): "
+                     + ", ".join(f"{x['power_uW']:g} µW" + ("" if x.get("bias_V") is None
+                                 else f" at {x['bias_V']:g} V") for x in nr) + "\n")
         fh.write(f"\nLock-ins: {json.dumps(d.info, default=float)}\n")
         fh.write(f"Instruments: {json.dumps(d.hw_info)}\n")
     return out
@@ -540,9 +546,9 @@ class SweepWorker(QtCore.QObject):
                                  "info")
                 self._sleep(self._wait)
                 return self._measure(ib, ip, spacing)
-        d.pc[ib, ip], d.refl[ib, ip] = pcs.mean(0), rfs.mean(0)
-        d.pc_std[ib, ip] = pcs.std(0, ddof=1) if len(pcs) > 1 else 0.0
-        d.refl_std[ib, ip] = rfs.std(0, ddof=1) if len(rfs) > 1 else 0.0
+        from scanner import _average        # theta from the mean X, Y (not the mean
+        d.pc[ib, ip], d.pc_std[ib, ip] = _average(pcs)        # of the angles: ±180°)
+        d.refl[ib, ip], d.refl_std[ib, ip] = _average(rfs)
         if np.isfinite(ps).any():
             d.p_uW[ib, ip] = np.nanmean(ps)
             d.p_std_uW[ib, ip] = np.nanstd(ps, ddof=1) if np.isfinite(ps).sum() > 1 else 0.0
@@ -555,6 +561,7 @@ class SweepWorker(QtCore.QObject):
         li = hw.lockin_refl if s.laser_lockin == "reflection" else hw.lockin_pc
         amp0 = None
         use_bias = any(b is not None for b in biases)
+        skipped = []                     # powers not reached (completed = False then)
         try:
             if any(p is not None for p in powers):
                 if self.pm is None:
@@ -594,11 +601,16 @@ class SweepWorker(QtCore.QObject):
                     self._finest_row(ib, b, li, wait, spacing, t0)
                     autosave(d, self.path, self.notify)
                     continue
+                unreach = None                  # lowest power found out of reach (row)
                 for ip, p in enumerate(powers):
                     if self._stop:
                         break
                     where = ("" if b is None else f"{b:g} V") + \
                             ("" if p is None else (", " if b is not None else "") + f"{p:g} µW")
+                    if p is not None and unreach is not None and p >= unreach:
+                        skipped.append({"bias_V": b, "power_uW": p})   # higher: no try
+                        done += 1
+                        continue
                     if p is not None:
                         res = set_laser_power(self.pm, li, p * 1e-6, 0,   # closest 2 mV step
                                               s.max_amp_V, status=self.status.emit,
@@ -611,11 +623,15 @@ class SweepWorker(QtCore.QObject):
                                                           "Laser power not set")):
                                 if res["message"].startswith("Laser power not set"):
                                     raise RuntimeError(res["message"])
-                                # higher powers in this row are out of reach too
+                                # higher powers in this row are out of reach too;
+                                # lower ones later in the list are still tried
                                 d.amp_V[ib, ip] = res["amplitude_V"]
                                 self._measure_point(ib, ip, wait, spacing, where)
-                                done += len(powers) - ip
-                                break
+                                skipped.append({"bias_V": b, "power_uW": p,
+                                                "measured_at_max_sine": True})
+                                unreach = p
+                                done += 1
+                                continue
                         d.amp_V[ib, ip] = res["amplitude_V"]
                     elif amp0 is not None:
                         d.amp_V[ib, ip] = amp0
@@ -624,7 +640,9 @@ class SweepWorker(QtCore.QObject):
                     el = time.time() - t0
                     self.progress.emit(done, total, el / done * (total - done))
                 autosave(d, self.path, self.notify)   # after every bias row
-            d.completed = not self._stop
+            if skipped:
+                d.info["powers_not_reached"] = skipped
+            d.completed = not self._stop and not skipped
             self._finish(li, amp0, use_bias)
             if s.finest:
                 d.trim()
