@@ -1,0 +1,171 @@
+Line scan
+Sample: selftest_line_long
+Started: 2026-10-26T20:41:10
+Completed: True
+From (-8.000, -3.000) to (8.000, 4.000) µm (from the origin), 17.464 µm long, 18 points, step 1027.3 nm
+Photocurrent conversion: raw × √2 × 1 µA/V (SR570) = peak (amplitude) [A]
+
+PHASE-CORRECTED COPY of 20261026_204110_selftest_line_long_line.h5: photocurrent X, Y, theta rotated by 12.00° (X' = X cos + Y sin), background subtracted: [0.0, 0.0] A
+  Phase +12.0° ± 0.4° from 95 pixels above 5× noise: one clear phase (Y after the correction is only noise). (Same as raising the lock-in PHASE by 12.0°.) Same phase in every map of the series. Sign: most of the signal positive (no earlier angle to follow).
+
+line.csv: numbers only, one row per point. Columns:
+  1: distance (µm)
+  2: x (µm)
+  3: y (µm)
+  4: photocurrent X at -0.6 V (A)
+  5: photocurrent Y at -0.6 V (A)
+  6: photocurrent R at -0.6 V (A)
+  7: photocurrent theta at -0.6 V (deg)
+  8: reflection X at -0.6 V (V)
+  9: reflection Y at -0.6 V (V)
+  10: reflection R at -0.6 V (V)
+  11: reflection theta at -0.6 V (deg)
+  12: photocurrent X at -0.5 V (A)
+  13: photocurrent Y at -0.5 V (A)
+  14: photocurrent R at -0.5 V (A)
+  15: photocurrent theta at -0.5 V (deg)
+  16: reflection X at -0.5 V (V)
+  17: reflection Y at -0.5 V (V)
+  18: reflection R at -0.5 V (V)
+  19: reflection theta at -0.5 V (deg)
+  20: photocurrent X at -0.4 V (A)
+  21: photocurrent Y at -0.4 V (A)
+  22: photocurrent R at -0.4 V (A)
+  23: photocurrent theta at -0.4 V (deg)
+  24: reflection X at -0.4 V (V)
+  25: reflection Y at -0.4 V (V)
+  26: reflection R at -0.4 V (V)
+  27: reflection theta at -0.4 V (deg)
+  28: photocurrent X at -0.3 V (A)
+  29: photocurrent Y at -0.3 V (A)
+  30: photocurrent R at -0.3 V (A)
+  31: photocurrent theta at -0.3 V (deg)
+  32: reflection X at -0.3 V (V)
+  33: reflection Y at -0.3 V (V)
+  34: reflection R at -0.3 V (V)
+  35: reflection theta at -0.3 V (deg)
+  36: photocurrent X at -0.2 V (A)
+  37: photocurrent Y at -0.2 V (A)
+  38: photocurrent R at -0.2 V (A)
+  39: photocurrent theta at -0.2 V (deg)
+  40: reflection X at -0.2 V (V)
+  41: reflection Y at -0.2 V (V)
+  42: reflection R at -0.2 V (V)
+  43: reflection theta at -0.2 V (deg)
+  44: photocurrent X at -0.1 V (A)
+  45: photocurrent Y at -0.1 V (A)
+  46: photocurrent R at -0.1 V (A)
+  47: photocurrent theta at -0.1 V (deg)
+  48: reflection X at -0.1 V (V)
+  49: reflection Y at -0.1 V (V)
+  50: reflection R at -0.1 V (V)
+  51: reflection theta at -0.1 V (deg)
+  52: photocurrent X at 0 V (A)
+  53: photocurrent Y at 0 V (A)
+  54: photocurrent R at 0 V (A)
+  55: photocurrent theta at 0 V (deg)
+  56: reflection X at 0 V (V)
+  57: reflection Y at 0 V (V)
+  58: reflection R at 0 V (V)
+  59: reflection theta at 0 V (deg)
+  60: photocurrent X at 0.1 V (A)
+  61: photocurrent Y at 0.1 V (A)
+  62: photocurrent R at 0.1 V (A)
+  63: photocurrent theta at 0.1 V (deg)
+  64: reflection X at 0.1 V (V)
+  65: reflection Y at 0.1 V (V)
+  66: reflection R at 0.1 V (V)
+  67: reflection theta at 0.1 V (deg)
+  68: photocurrent X at 0.2 V (A)
+  69: photocurrent Y at 0.2 V (A)
+  70: photocurrent R at 0.2 V (A)
+  71: photocurrent theta at 0.2 V (deg)
+  72: reflection X at 0.2 V (V)
+  73: reflection Y at 0.2 V (V)
+  74: reflection R at 0.2 V (V)
+  75: reflection theta at 0.2 V (deg)
+  76: photocurrent X at 0.3 V (A)
+  77: photocurrent Y at 0.3 V (A)
+  78: photocurrent R at 0.3 V (A)
+  79: photocurrent theta at 0.3 V (deg)
+  80: reflection X at 0.3 V (V)
+  81: reflection Y at 0.3 V (V)
+  82: reflection R at 0.3 V (V)
+  83: reflection theta at 0.3 V (deg)
+  84: photocurrent X at 0.4 V (A)
+  85: photocurrent Y at 0.4 V (A)
+  86: photocurrent R at 0.4 V (A)
+  87: photocurrent theta at 0.4 V (deg)
+  88: reflection X at 0.4 V (V)
+  89: reflection Y at 0.4 V (V)
+  90: reflection R at 0.4 V (V)
+  91: reflection theta at 0.4 V (deg)
+  92: photocurrent X at 0.5 V (A)
+  93: photocurrent Y at 0.5 V (A)
+  94: photocurrent R at 0.5 V (A)
+  95: photocurrent theta at 0.5 V (deg)
+  96: reflection X at 0.5 V (V)
+  97: reflection Y at 0.5 V (V)
+  98: reflection R at 0.5 V (V)
+  99: reflection theta at 0.5 V (deg)
+
+photocurrent_X_matrix.csv: numbers only, Photocurrent X in A; one row per bias (-0.6, -0.5, -0.4, -0.3, -0.2, -0.1, 0, 0.1, 0.2, 0.3, 0.4, 0.5 V), one column per point along the line
+
+Experiment:
+
+Notes:
+
+
+Settings:
+  x_center: -8
+  y_center: -3
+  origin: corner
+  origin_x: 0
+  origin_y: 0
+  flip_x: False
+  flip_y: False
+  angle_deg: 23.629377730656817
+  x_dir: 1
+  y_dir: 1
+  x_size: 17.46424919657298
+  y_size: 0.0
+  step: 1.0273087762689987
+  serpentine: False
+  settle_tc: 3.0
+  settle_auto: True
+  backlash_um: 1.0
+  extra_settle_ms: 0.0
+  auto_range: False
+  n_avg: 1
+  where_map: 
+  file_name: 
+  map_names: []
+  biases: [-0.6, -0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
+  sample: selftest_line_long
+  power_lock: False
+  target_power_uW: None
+  power_tol_pct: 1.0
+  mode: step
+  amp_mode: sr570
+  amp_value: 1e-06
+  signal_as: peak
+  lockin_unit: V
+  scan_type: line
+  outer: bias
+  outer_values: []
+
+Per line (lock-in settings read from the front panels; for a power series also the power reached):
+  line0: {"angle_deg": 23.629377730656817, "bias_V": -0.6, "chop_freq_Hz": 1013.0, "laser_over_range_end": false, "laser_over_range_start": false, "laser_power_on_sample_uW_end": 84.96536367594351, "laser_power_on_sample_uW_start": 85.58482054009937, "laser_power_uW_end": 84.96536367594351, "laser_power_uW_start": 85.58482054009937, "laser_range_uW_end": 1000.0, "laser_range_uW_start": 1000.0, "laser_wavelength_nm": 532, "meter_to_sample_ratio": 1.0, "note": "line scan: images have 1 row; columns follow the line from start to end (distance_um)", "overload_lines": 0, "sens_pc": 1e-08, "sens_refl": 0.1, "slope_poles": [2, 2], "tau_pc_s": 0.001, "tau_refl_s": 0.001, "wait_s": 0.007}
+  line1: {"angle_deg": 23.629377730656817, "bias_V": -0.5, "chop_freq_Hz": 1013.0, "laser_over_range_end": false, "laser_over_range_start": false, "laser_power_on_sample_uW_end": 85.05922370784549, "laser_power_on_sample_uW_start": 85.23378089202335, "laser_power_uW_end": 85.05922370784549, "laser_power_uW_start": 85.23378089202335, "laser_range_uW_end": 1000.0, "laser_range_uW_start": 1000.0, "laser_wavelength_nm": 532, "meter_to_sample_ratio": 1.0, "note": "line scan: images have 1 row; columns follow the line from start to end (distance_um)", "overload_lines": 0, "sens_pc": 1e-08, "sens_refl": 0.1, "slope_poles": [2, 2], "tau_pc_s": 0.001, "tau_refl_s": 0.001, "wait_s": 0.007}
+  line2: {"angle_deg": 23.629377730656817, "bias_V": -0.4, "chop_freq_Hz": 1013.0, "laser_over_range_end": false, "laser_over_range_start": false, "laser_power_on_sample_uW_end": 84.7190577327616, "laser_power_on_sample_uW_start": 84.70106658603177, "laser_power_uW_end": 84.7190577327616, "laser_power_uW_start": 84.70106658603177, "laser_range_uW_end": 1000.0, "laser_range_uW_start": 1000.0, "laser_wavelength_nm": 532, "meter_to_sample_ratio": 1.0, "note": "line scan: images have 1 row; columns follow the line from start to end (distance_um)", "overload_lines": 0, "sens_pc": 1e-08, "sens_refl": 0.1, "slope_poles": [2, 2], "tau_pc_s": 0.001, "tau_refl_s": 0.001, "wait_s": 0.007}
+  line3: {"angle_deg": 23.629377730656817, "bias_V": -0.3, "chop_freq_Hz": 1013.0, "laser_over_range_end": false, "laser_over_range_start": false, "laser_power_on_sample_uW_end": 84.8783735939436, "laser_power_on_sample_uW_start": 84.43715991854086, "laser_power_uW_end": 84.8783735939436, "laser_power_uW_start": 84.43715991854086, "laser_range_uW_end": 1000.0, "laser_range_uW_start": 1000.0, "laser_wavelength_nm": 532, "meter_to_sample_ratio": 1.0, "note": "line scan: images have 1 row; columns follow the line from start to end (distance_um)", "overload_lines": 0, "sens_pc": 1e-08, "sens_refl": 0.1, "slope_poles": [2, 2], "tau_pc_s": 0.001, "tau_refl_s": 0.001, "wait_s": 0.007}
+  line4: {"angle_deg": 23.629377730656817, "bias_V": -0.2, "chop_freq_Hz": 1013.0, "laser_over_range_end": false, "laser_over_range_start": false, "laser_power_on_sample_uW_end": 85.02474346200944, "laser_power_on_sample_uW_start": 85.13843366485665, "laser_power_uW_end": 85.02474346200944, "laser_power_uW_start": 85.13843366485665, "laser_range_uW_end": 1000.0, "laser_range_uW_start": 1000.0, "laser_wavelength_nm": 532, "meter_to_sample_ratio": 1.0, "note": "line scan: images have 1 row; columns follow the line from start to end (distance_um)", "overload_lines": 0, "sens_pc": 1e-08, "sens_refl": 0.1, "slope_poles": [2, 2], "tau_pc_s": 0.001, "tau_refl_s": 0.001, "wait_s": 0.007}
+  line5: {"angle_deg": 23.629377730656817, "bias_V": -0.1, "chop_freq_Hz": 1013.0, "laser_over_range_end": false, "laser_over_range_start": false, "laser_power_on_sample_uW_end": 85.07896803450257, "laser_power_on_sample_uW_start": 84.59763931634212, "laser_power_uW_end": 85.07896803450257, "laser_power_uW_start": 84.59763931634212, "laser_range_uW_end": 1000.0, "laser_range_uW_start": 1000.0, "laser_wavelength_nm": 532, "meter_to_sample_ratio": 1.0, "note": "line scan: images have 1 row; columns follow the line from start to end (distance_um)", "overload_lines": 0, "sens_pc": 1e-08, "sens_refl": 0.1, "slope_poles": [2, 2], "tau_pc_s": 0.001, "tau_refl_s": 0.001, "wait_s": 0.007}
+  line6: {"angle_deg": 23.629377730656817, "bias_V": 0.0, "chop_freq_Hz": 1013.0, "laser_over_range_end": false, "laser_over_range_start": false, "laser_power_on_sample_uW_end": 84.37488786362225, "laser_power_on_sample_uW_start": 84.46593137319712, "laser_power_uW_end": 84.37488786362225, "laser_power_uW_start": 84.46593137319712, "laser_range_uW_end": 1000.0, "laser_range_uW_start": 1000.0, "laser_wavelength_nm": 532, "meter_to_sample_ratio": 1.0, "note": "line scan: images have 1 row; columns follow the line from start to end (distance_um)", "overload_lines": 0, "sens_pc": 1e-08, "sens_refl": 0.1, "slope_poles": [2, 2], "tau_pc_s": 0.001, "tau_refl_s": 0.001, "wait_s": 0.007}
+  line7: {"angle_deg": 23.629377730656817, "bias_V": 0.1, "chop_freq_Hz": 1013.0, "laser_over_range_end": false, "laser_over_range_start": false, "laser_power_on_sample_uW_end": 84.3784614874601, "laser_power_on_sample_uW_start": 84.65345822821814, "laser_power_uW_end": 84.3784614874601, "laser_power_uW_start": 84.65345822821814, "laser_range_uW_end": 1000.0, "laser_range_uW_start": 1000.0, "laser_wavelength_nm": 532, "meter_to_sample_ratio": 1.0, "note": "line scan: images have 1 row; columns follow the line from start to end (distance_um)", "overload_lines": 0, "sens_pc": 1e-08, "sens_refl": 0.1, "slope_poles": [2, 2], "tau_pc_s": 0.001, "tau_refl_s": 0.001, "wait_s": 0.007}
+  line8: {"angle_deg": 23.629377730656817, "bias_V": 0.2, "chop_freq_Hz": 1013.0, "laser_over_range_end": false, "laser_over_range_start": false, "laser_power_on_sample_uW_end": 84.32326543423409, "laser_power_on_sample_uW_start": 84.32647260876521, "laser_power_uW_end": 84.32326543423409, "laser_power_uW_start": 84.32647260876521, "laser_range_uW_end": 1000.0, "laser_range_uW_start": 1000.0, "laser_wavelength_nm": 532, "meter_to_sample_ratio": 1.0, "note": "line scan: images have 1 row; columns follow the line from start to end (distance_um)", "overload_lines": 0, "sens_pc": 1e-08, "sens_refl": 0.1, "slope_poles": [2, 2], "tau_pc_s": 0.001, "tau_refl_s": 0.001, "wait_s": 0.007}
+  line9: {"angle_deg": 23.629377730656817, "bias_V": 0.3, "chop_freq_Hz": 1013.0, "laser_over_range_end": false, "laser_over_range_start": false, "laser_power_on_sample_uW_end": 84.22106563669082, "laser_power_on_sample_uW_start": 84.31293137316972, "laser_power_uW_end": 84.22106563669082, "laser_power_uW_start": 84.31293137316972, "laser_range_uW_end": 1000.0, "laser_range_uW_start": 1000.0, "laser_wavelength_nm": 532, "meter_to_sample_ratio": 1.0, "note": "line scan: images have 1 row; columns follow the line from start to end (distance_um)", "overload_lines": 0, "sens_pc": 1e-08, "sens_refl": 0.1, "slope_poles": [2, 2], "tau_pc_s": 0.001, "tau_refl_s": 0.001, "wait_s": 0.007}
+  line10: {"angle_deg": 23.629377730656817, "bias_V": 0.4, "chop_freq_Hz": 1013.0, "laser_over_range_end": false, "laser_over_range_start": false, "laser_power_on_sample_uW_end": 84.2661718508274, "laser_power_on_sample_uW_start": 84.44957897697978, "laser_power_uW_end": 84.2661718508274, "laser_power_uW_start": 84.44957897697978, "laser_range_uW_end": 1000.0, "laser_range_uW_start": 1000.0, "laser_wavelength_nm": 532, "meter_to_sample_ratio": 1.0, "note": "line scan: images have 1 row; columns follow the line from start to end (distance_um)", "overload_lines": 0, "sens_pc": 1e-08, "sens_refl": 0.1, "slope_poles": [2, 2], "tau_pc_s": 0.001, "tau_refl_s": 0.001, "wait_s": 0.007}
+  line11: {"angle_deg": 23.629377730656817, "bias_V": 0.5, "chop_freq_Hz": 1013.0, "laser_over_range_end": false, "laser_over_range_start": false, "laser_power_on_sample_uW_end": 84.32570089700856, "laser_power_on_sample_uW_start": 84.8360204636715, "laser_power_uW_end": 84.32570089700856, "laser_power_uW_start": 84.8360204636715, "laser_range_uW_end": 1000.0, "laser_range_uW_start": 1000.0, "laser_wavelength_nm": 532, "meter_to_sample_ratio": 1.0, "note": "line scan: images have 1 row; columns follow the line from start to end (distance_um)", "overload_lines": 0, "sens_pc": 1e-08, "sens_refl": 0.1, "slope_poles": [2, 2], "tau_pc_s": 0.001, "tau_refl_s": 0.001, "wait_s": 0.007}
+
+Instruments: {"stage": "Simulated Tango", "lockin_photocurrent": "Simulated SR830 (photocurrent)", "lockin_reflection": "Simulated SR830 (reflection)", "bias": "Simulated bias", "accessories": {"powermeter": "Simulated PM100USB", "camera": "Simulated CS165CU"}, "simulated": true}

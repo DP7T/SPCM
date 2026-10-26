@@ -1,0 +1,66 @@
+Sample: sample
+Started: 2026-10-26T20:42:53
+Completed: True
+Photocurrent conversion: raw × √2 (lock-in only) = peak (amplitude) [V]
+
+CSV files: plain matrices of numbers. Row = y, column = x, first row = lowest y (as on screen). Photocurrent in V, reflection in V, theta in degrees.
+x (µm, from the origin), one value per column: 1.0000, 1.2000, 1.4000, 1.6000, 1.8000, 2.0000, 2.2000, 2.4000, 2.6000, 2.8000, 3.0000, 3.2000, 3.4000, 3.6000, 3.8000, 4.0000, 4.2000, 4.4000, 4.6000, 4.8000, 5.0000, 5.2000, 5.4000, 5.6000, 5.8000, 6.0000, 6.2000, 6.4000, 6.6000, 6.8000, 7.0000, 7.2000, 7.4000, 7.6000, 7.8000, 8.0000, 8.2000, 8.4000, 8.6000, 8.8000, 9.0000
+y (µm, from the origin), one value per row: -1.0000, -0.8000, -0.6000, -0.4000, -0.2000, 0.0000, 0.2000, 0.4000, 0.6000, 0.8000, 1.0000
+Origin (0, 0) = stage (0.000, 0.000) µm
+
+Experiment:
+  Polarization: 
+  Temperature: 
+  Pressure: 
+  Laser wavelength: 
+  Objective: 
+  Modulation frequency: 
+  Gate voltage: 
+
+Notes:
+
+
+Scan settings:
+  x_center: -1.0
+  y_center: 1.0
+  origin: corner
+  origin_x: 0.0
+  origin_y: 0.0
+  flip_x: True
+  flip_y: True
+  angle_deg: 0.0
+  x_dir: -1
+  y_dir: -1
+  x_size: 8.0
+  y_size: 2.0
+  step: 0.2
+  serpentine: False
+  settle_tc: 3.0
+  settle_auto: True
+  backlash_um: 1.0
+  extra_settle_ms: 0.0
+  auto_range: False
+  n_avg: 1
+  where_map: 
+  file_name: 20261026_2042_sample_532nm_map_8x2um_200nm_83.7uW
+  map_names: ['20261026_2042_sample_532nm_map_8x2um_200nm_83.7uW']
+  biases: [None]
+  sample: sample
+  power_lock: False
+  target_power_uW: None
+  power_tol_pct: 1.0
+  mode: step
+  amp_mode: lockin
+  amp_value: 1.0
+  signal_as: peak
+  lockin_unit: V
+  scan_type: map
+  outer: bias
+  outer_values: []
+
+Per map (lock-in settings read from the front panels):
+  map0: {"angle_deg": 0.0, "bias_V": NaN, "chop_freq_Hz": 1013.0, "laser_over_range_end": false, "laser_over_range_start": false, "laser_power_on_sample_uW_end": 86.52684908246543, "laser_power_on_sample_uW_start": 84.56376392545856, "laser_power_uW_end": 86.52684908246543, "laser_power_uW_start": 84.56376392545856, "laser_range_uW_end": 1000.0, "laser_range_uW_start": 1000.0, "laser_wavelength_nm": 532, "meter_to_sample_ratio": 1.0, "overload_lines": 0, "sens_pc": 1e-08, "sens_refl": 0.1, "slope_poles": [2, 2], "tau_pc_s": 0.001, "tau_refl_s": 0.001, "wait_s": 0.007}
+  map0/powermeter/end: over_range=False, power_on_sample_uW=86.53, power_uW=86.53, range_uW=1000
+  map0/powermeter/start: over_range=False, power_on_sample_uW=84.56, power_uW=84.56, range_uW=1000
+
+Instruments: {"stage": "Simulated Tango", "lockin_photocurrent": "Simulated SR830 (photocurrent)", "lockin_reflection": "Simulated SR830 (reflection)", "bias": "Simulated bias", "accessories": {"powermeter": "Simulated PM100USB", "camera": "Simulated CS165CU"}, "simulated": true}

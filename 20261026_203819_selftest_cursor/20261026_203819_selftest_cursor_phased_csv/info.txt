@@ -1,0 +1,64 @@
+Sample: selftest_cursor
+Started: 2026-10-26T20:38:19
+Completed: True
+Photocurrent conversion: raw × √2 (lock-in only) = peak (amplitude) [V]
+PHASE-CORRECTED COPY of 20261026_203819_selftest_cursor.h5: photocurrent X, Y, theta rotated by 12.03° (X' = X cos + Y sin), background subtracted: [0.0, 0.0] V
+  Phase +12.0° ± 0.2° from 204 pixels above 5× noise: one clear phase (Y after the correction is only noise). (Same as raising the lock-in PHASE by 12.0°.) Same phase in every map of the series. Sign: most of the signal positive (no earlier angle to follow).
+
+CSV files: plain matrices of numbers. Row = y, column = x, first row = lowest y (as on screen). Photocurrent in V, reflection in V, theta in degrees.
+x (µm, from the origin), one value per column: -8.0000, -7.0000, -6.0000, -5.0000, -4.0000, -3.0000, -2.0000, -1.0000, 0.0000, 1.0000, 2.0000, 3.0000, 4.0000, 5.0000, 6.0000, 7.0000, 8.0000
+y (µm, from the origin), one value per row: -6.0000, -5.0000, -4.0000, -3.0000, -2.0000, -1.0000, 0.0000, 1.0000, 2.0000, 3.0000, 4.0000, 5.0000, 6.0000
+Origin (0, 0) = stage (0.000, 0.000) µm
+
+Experiment:
+
+Notes:
+
+
+Scan settings:
+  x_center: -8
+  y_center: -6
+  origin: corner
+  origin_x: 0
+  origin_y: 0
+  flip_x: False
+  flip_y: False
+  angle_deg: 0.0
+  x_dir: 1
+  y_dir: 1
+  x_size: 16
+  y_size: 12
+  step: 1.0
+  serpentine: False
+  settle_tc: 3.0
+  settle_auto: True
+  backlash_um: 1.0
+  extra_settle_ms: 0.0
+  auto_range: False
+  n_avg: 1
+  where_map: 
+  file_name: 
+  map_names: []
+  biases: [-0.5, 0.5]
+  sample: selftest_cursor
+  power_lock: False
+  target_power_uW: None
+  power_tol_pct: 1.0
+  mode: step
+  amp_mode: lockin
+  amp_value: 1.0
+  signal_as: peak
+  lockin_unit: V
+  scan_type: map
+  outer: bias
+  outer_values: []
+
+Per map (lock-in settings read from the front panels):
+  map0: {"angle_deg": 0.0, "bias_V": -0.5, "chop_freq_Hz": 1013.0, "laser_over_range_end": false, "laser_over_range_start": false, "laser_power_on_sample_uW_end": 58.32189196304734, "laser_power_on_sample_uW_start": 58.5774354991936, "laser_power_uW_end": 58.32189196304734, "laser_power_uW_start": 58.5774354991936, "laser_range_uW_end": 1000.0, "laser_range_uW_start": 1000.0, "laser_wavelength_nm": 532, "meter_to_sample_ratio": 1.0, "overload_lines": 0, "sens_pc": 1e-08, "sens_refl": 0.1, "slope_poles": [2, 2], "tau_pc_s": 0.001, "tau_refl_s": 0.001, "wait_s": 0.007}
+  map1: {"angle_deg": 0.0, "bias_V": 0.5, "chop_freq_Hz": 1013.0, "laser_over_range_end": false, "laser_over_range_start": false, "laser_power_on_sample_uW_end": 58.237670135478695, "laser_power_on_sample_uW_start": 58.231579991449806, "laser_power_uW_end": 58.237670135478695, "laser_power_uW_start": 58.231579991449806, "laser_range_uW_end": 1000.0, "laser_range_uW_start": 1000.0, "laser_wavelength_nm": 532, "meter_to_sample_ratio": 1.0, "overload_lines": 0, "sens_pc": 1e-08, "sens_refl": 0.1, "slope_poles": [2, 2], "tau_pc_s": 0.001, "tau_refl_s": 0.001, "wait_s": 0.007}
+  map0/powermeter/end: over_range=False, power_on_sample_uW=58.32, power_uW=58.32, range_uW=1000
+  map0/powermeter/start: over_range=False, power_on_sample_uW=58.58, power_uW=58.58, range_uW=1000
+  map1/powermeter/end: over_range=False, power_on_sample_uW=58.24, power_uW=58.24, range_uW=1000
+  map1/powermeter/start: over_range=False, power_on_sample_uW=58.23, power_uW=58.23, range_uW=1000
+
+Instruments: {"stage": "Simulated Tango", "lockin_photocurrent": "Simulated SR830 (photocurrent)", "lockin_reflection": "Simulated SR830 (reflection)", "bias": "Simulated bias", "accessories": {"powermeter": "Simulated PM100USB", "camera": "Simulated CS165CU"}, "simulated": true}

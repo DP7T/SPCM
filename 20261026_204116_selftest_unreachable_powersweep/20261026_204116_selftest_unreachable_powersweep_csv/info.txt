@@ -1,0 +1,68 @@
+Power sweep
+Sample: selftest_unreachable
+Started: 2026-10-26T20:41:16
+Completed: False
+Position: (5.000, 0.500) µm from the origin = stage (-5.000, 0.500) µm
+Photocurrent conversion: raw × √2 (lock-in only) = peak (amplitude) [V]
+Each point: mean of 2 readings; *_std = their standard deviation
+sweep.csv: numbers only, one row per point. Columns:
+  1: bias_V
+  2: power_set_uW
+  3: power_on_sample_uW
+  4: power_std_uW
+  5: sine_amplitude_V
+  6: time_s
+  7: photocurrent_X_V
+  8: photocurrent_X_std_V
+  9: photocurrent_Y_V
+  10: photocurrent_Y_std_V
+  11: photocurrent_R_V
+  12: photocurrent_R_std_V
+  13: photocurrent_theta_deg
+  14: photocurrent_theta_std_deg
+  15: reflection_X_V
+  16: reflection_X_std_V
+  17: reflection_Y_V
+  18: reflection_Y_std_V
+  19: reflection_R_V
+  20: reflection_R_std_V
+  21: reflection_theta_deg
+  22: reflection_theta_std_deg
+
+Experiment:
+
+Notes:
+
+
+Settings:
+  kind: power
+  powers_uW: [100000, 30]
+  biases: []
+  n_avg: 2
+  max_amp_V: 2.0
+  laser_lockin: photocurrent
+  restore_power: True
+  x_stage: -5
+  y_stage: 0.5
+  u: 5
+  v: 0.5
+  where_map: 
+  settle_auto: True
+  settle_tc: 3.0
+  extra_settle_ms: 0.0
+  auto_range: False
+  amp_mode: lockin
+  amp_value: 1.0
+  signal_as: peak
+  lockin_unit: V
+  sample: selftest_unreachable
+  finest: False
+  p_from_uW: 1.0
+  p_to_uW: 10.0
+  every_steps: 1
+  both_ways: False
+
+Powers NOT reached (SINE OUT at its limit; the first one was measured at the highest power possible, higher ones skipped): 100000 µW
+
+Lock-ins: {"stage_at_start_um": [-5.0, 0.5], "tau_pc_s": 0.001, "tau_refl_s": 0.001, "sens_pc": 1e-08, "sens_refl": 0.1, "slope_poles": [2, 2], "settle_wait_s": 0.007, "reading_spacing_s": 0.001, "sine_amplitude_before_V": 1.0, "powers_not_reached": [{"bias_V": null, "power_uW": 100000, "measured_at_max_sine": true}]}
+Instruments: {"stage": "Simulated Tango", "lockin_photocurrent": "Simulated SR830 (photocurrent)", "lockin_reflection": "Simulated SR830 (reflection)", "bias": "Simulated bias", "accessories": {"powermeter": "Simulated PM100USB", "camera": "Simulated CS165CU"}, "simulated": true}
