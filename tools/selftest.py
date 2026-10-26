@@ -1025,6 +1025,20 @@ if HAVE_QT:
         shot("iv_dark")
         w._toggle_dark(False)
         shot("iv_light")
+        # stopped before anything was measured: no folder is left behind
+        w.side_tabs.setCurrentIndex(2)
+        w.sw_kind.setCurrentIndex(w.sw_kind.findData("power"))
+        w.sw_fine.setChecked(False)
+        w.sw_powers.setText("200, 300")               # setting the power takes a while
+        w.start()
+        p_empty = w.sweep_data.path
+        w.stop()
+        t0 = time.time()
+        while (w.thread is not None or w._saving()) and time.time() - t0 < 120:
+            pump(0.2)
+        assert not np.isfinite(w.sweep_data.pc[..., 0]).any(), "it measured something"
+        assert not os.path.exists(os.path.dirname(p_empty)), "empty folder left behind"
+        print("      stopped before the first point: no folder left")
         # Settings window: saving keeps what the main window remembered on disk
         import tempfile
         import yaml as _yaml

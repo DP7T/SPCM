@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.17 (in testing)
+- A measurement stopped (or failed) **before anything was measured** - e.g. while the
+  laser power was still being set - no longer leaves a folder behind (map, line, point
+  sweep, I–V). The status bar says that nothing was saved
+
 ## 1.2.16 (2026-10-25)
 Bug fixes only (from an outside code review), each with a self-test:
 - The program crashed at start **without a camera** (camera off or not found) since 1.2.11

@@ -2536,6 +2536,9 @@ class MainWindow(QtWidgets.QMainWindow):
         done = self.line_data.completed
         self._cleanup()
         self.use_line_btn.setEnabled(self.line_btn.isChecked())
+        if self._drop_if_empty(path, np.isfinite(self.line_data.pc[..., 0]).any(),
+                               "Line scan"):
+            return
         if getattr(self, "_discard", False):
             self._delete_scan_files(path)
             self.statusBar().showMessage("Line scan stopped and discarded (nothing saved)")
@@ -2573,6 +2576,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage("Line scan stopped and discarded (nothing saved)")
             return
         self._redraw_line()
+        if not np.isfinite(self.line_data.pc[..., 0]).any():
+            self._delete_scan_files(self.line_data.path)       # nothing measured: no folder
+            self.error("Line scan aborted before anything was measured (nothing saved):"
+                       "\n\n" + tb)
+            return
         self.error("Line scan aborted (what was measured is saved):\n\n" + tb)
 
     # ---------------------------------------------------------------- point sweeps
@@ -3096,6 +3104,9 @@ class MainWindow(QtWidgets.QMainWindow):
     def on_sweep_finished(self, path):
         done = self.sweep_data.completed
         self._cleanup()
+        if self._drop_if_empty(path, np.isfinite(self.sweep_data.pc[..., 0]).any(),
+                               "Point sweep"):
+            return
         if getattr(self, "_discard", False):
             self._delete_scan_files(path)
             self.statusBar().showMessage("Sweep stopped and discarded (nothing saved)")
@@ -3129,6 +3140,10 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage("Sweep stopped and discarded (nothing saved)")
             return
         self._redraw_sweep()
+        if not np.isfinite(self.sweep_data.pc[..., 0]).any():
+            self._delete_scan_files(self.sweep_data.path)
+            self.error("Sweep aborted before anything was measured (nothing saved):\n\n" + tb)
+            return
         self.error("Sweep aborted (what was measured is saved):\n\n" + tb)
 
     # ---------------------------------------------------------------- quick I-V
@@ -3336,6 +3351,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def on_iv_finished(self, path):
         done = self.iv_data.completed
         self._cleanup()
+        if self._drop_if_empty(path, bool(self.iv_data.rows), "I–V"):
+            return
         if getattr(self, "_discard", False):
             self._delete_scan_files(path)
             self.statusBar().showMessage("I–V stopped and discarded (nothing saved)")
@@ -3370,6 +3387,11 @@ class MainWindow(QtWidgets.QMainWindow):
             self._delete_scan_files(self.iv_data.path)
             return
         self._redraw_iv()
+        if not self.iv_data.rows:
+            self._delete_scan_files(self.iv_data.path)
+            self.error("I–V aborted before anything was measured (bias ramped to 0 V, nothing "
+                       "saved):\n\n" + tb)
+            return
         self.error("I–V aborted (bias ramped to 0 V, what was measured is saved):\n\n" + tb)
 
     # ---------------------------------------------------------------- resolution
@@ -3866,6 +3888,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.discard_btn.setEnabled(False)
         self.redraw()
 
+    def _drop_if_empty(self, path, has_data, what):
+        """Stopped before anything was measured (e.g. during the power setting): no
+        folder is left behind. -> True if the run was removed."""
+        if has_data or getattr(self, "_discard", False):
+            return False
+        if path:
+            self._delete_scan_files(path)
+        self.statusBar().showMessage(f"{what} stopped before anything was measured - "
+                                     "nothing was saved (no folder made).")
+        return True
+
     def _nothing_saved(self, path):
         """The run stopped before any data was taken (e.g. power setting aborted)."""
         if path and os.path.exists(path):
@@ -3879,6 +3912,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._nothing_saved(path):
             return
         done = self.data.completed
+        if not np.isfinite(self.data.pc[..., 0]).any() and \
+                not getattr(self, "_discard", False):
+            self._cleanup()
+            self._drop_if_empty(path, False, "Map")
+            return
         if getattr(self, "_discard", False):
             self._cleanup()
             self._delete_scan_files(path)
@@ -4035,6 +4073,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if getattr(self, "_discard", False):
             self._delete_scan_files(self.data.path) if getattr(self.data, "path", None) else None
             self.statusBar().showMessage("Scan stopped and discarded (nothing saved)")
+            return
+        if self.data is not None and getattr(self.data, "path", None) and \
+                not np.isfinite(self.data.pc[..., 0]).any():
+            self._delete_scan_files(self.data.path)
+            self.error("Scan aborted before anything was measured (nothing saved):\n\n" + tb)
             return
         self.error("Scan aborted (partial data saved):\n\n" + tb)
 
