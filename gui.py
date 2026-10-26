@@ -3781,13 +3781,23 @@ class MainWindow(QtWidgets.QMainWindow):
             origin=self.origin_xy, flips=(self.sx < 0, self.sy < 0),
             target_power_uW=base.target_power_uW)
 
-    def _delete_scan_files(self, path):
+    def _delete_scan_files(self, path, tries=12):
         import glob
         import shutil
         base = os.path.splitext(path)[0]
         folder = os.path.dirname(os.path.abspath(path))
         if os.path.basename(folder) == os.path.basename(base):   # its own folder
             shutil.rmtree(folder, ignore_errors=True)
+            if os.path.exists(folder):
+                # Windows: a file that was just written can be held for a moment (virus
+                # scanner, indexing, an Explorer window on that folder) - try again
+                if tries > 0:
+                    QtCore.QTimer.singleShot(
+                        500, lambda: self._delete_scan_files(path, tries - 1))
+                else:
+                    self.toast(f"Could not delete the folder {os.path.basename(folder)} "
+                               "(open in another program or an Explorer window?). "
+                               "Please delete it by hand.", "warn")
             return
         for f in [path, base + ".png"] + glob.glob(base + "_map*.png"):
             try:

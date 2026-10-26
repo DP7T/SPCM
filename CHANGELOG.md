@@ -1,6 +1,9 @@
 # Changelog
 
 ## 1.2.17 (in testing)
+- **Stop & discard** now really removes the measurement's folder: if Windows still holds a
+  file that was just written (virus scanner, an Explorer window on the folder), it tries
+  again for a few seconds, and tells you if the folder can't be deleted
 - A measurement stopped (or failed) **before anything was measured** - e.g. while the
   laser power was still being set - no longer leaves a folder behind (map, line, point
   sweep, I–V). The status bar says that nothing was saved

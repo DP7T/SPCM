@@ -1025,6 +1025,20 @@ if HAVE_QT:
         shot("iv_dark")
         w._toggle_dark(False)
         shot("iv_light")
+        # Stop & discard (double-click) during a map: its folder is deleted
+        w.side_tabs.setCurrentIndex(0)
+        w.start()
+        p_disc = w.data.path
+        t0 = time.time()
+        while not np.isfinite(w.data.pc[..., 0]).any() and time.time() - t0 < 60:
+            pump(0.2)
+        w.discard_btn.doubleClicked.emit()
+        t0 = time.time()
+        while (w.thread is not None or w._saving()) and time.time() - t0 < 120:
+            pump(0.2)
+        pump(1.0)
+        assert not os.path.exists(os.path.dirname(p_disc)), "folder left after Stop & discard"
+        print("      Stop & discard: folder deleted")
         # stopped before anything was measured: no folder is left behind
         w.side_tabs.setCurrentIndex(2)
         w.sw_kind.setCurrentIndex(w.sw_kind.findData("power"))
