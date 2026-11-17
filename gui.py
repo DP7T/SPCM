@@ -1113,6 +1113,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     w_.textChanged.connect(lambda *_: self._name_soon.start())
         QtCore.QTimer.singleShot(400, self._name_changed)
         QtCore.QTimer.singleShot(300, self._start_here_on_launch)
+        QtCore.QTimer.singleShot(2000, self._retry_deletes)   # discarded earlier, still there
         self._init_preview()
         dark = bool((self.config.get("ui", {}) or {}).get("dark", False))
         for w in self.findChildren(pg.GraphicsLayoutWidget):
@@ -3783,21 +3784,24 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _delete_scan_files(self, path, tries=12):
         import glob
-        import shutil
         base = os.path.splitext(path)[0]
         folder = os.path.dirname(os.path.abspath(path))
         if os.path.basename(folder) == os.path.basename(base):   # its own folder
-            shutil.rmtree(folder, ignore_errors=True)
+            err = self._rmtree(folder)
             if os.path.exists(folder):
-                # Windows: a file that was just written can be held for a moment (virus
-                # scanner, indexing, an Explorer window on that folder) - try again
-                if tries > 0:
-                    QtCore.QTimer.singleShot(
-                        500, lambda: self._delete_scan_files(path, tries - 1))
-                else:
-                    self.toast(f"Could not delete the folder {os.path.basename(folder)} "
-                               "(open in another program or an Explorer window?). "
-                               "Please delete it by hand.", "warn")
+                # Windows: a file that was just written can be held for a while (virus
+                # scanner, cloud sync such as OneDrive, an Explorer window on the folder).
+                # Keep it on a list and try again in the background - also after a
+                # restart - instead of asking you to delete it by hand.
+                pend = self._pending_deletes()
+                if folder not in pend:
+                    pend.append(folder)
+                    self._save_setting("ui", "pending_delete", pend)
+                    instruments._note(f"discard: could not delete {folder} yet: {err}")
+                self.statusBar().showMessage(
+                    f"Discarded. Windows still holds a file in {os.path.basename(folder)}; "
+                    "it is deleted by itself as soon as Windows lets go.")
+                self._retry_deletes()
             return
         for f in [path, base + ".png"] + glob.glob(base + "_map*.png"):
             try:
@@ -3805,6 +3809,50 @@ class MainWindow(QtWidgets.QMainWindow):
             except OSError:
                 pass
         shutil.rmtree(base + "_csv", ignore_errors=True)
+
+    @staticmethod
+    def _rmtree(folder):
+        """Delete a folder; -> text of the first error (which file, why), or ''."""
+        import shutil
+        errs = []
+        try:
+            if sys.version_info >= (3, 12):
+                shutil.rmtree(folder, onexc=lambda f, p, e: errs.append(f"{p}: {e}"))
+            else:
+                shutil.rmtree(folder, onerror=lambda f, p, e: errs.append(f"{p}: {e[1]}"))
+        except Exception as e:
+            errs.append(str(e))
+        return errs[0] if errs else ""
+
+    def _pending_deletes(self):
+        ui = self.config.setdefault("ui", {})
+        pend = ui.get("pending_delete")
+        if not isinstance(pend, list):
+            pend = ui["pending_delete"] = []
+        return pend
+
+    def _retry_deletes(self):
+        """Discarded folders that Windows didn't let go of yet: try again every 10 s
+        (and at the next start) until they are gone."""
+        pend = self._pending_deletes()
+        left = []
+        for folder in pend:
+            if os.path.exists(folder):
+                self._rmtree(folder)
+            if os.path.exists(folder):
+                left.append(folder)
+        if left != pend:
+            pend[:] = left
+            self._save_setting("ui", "pending_delete", list(left))
+        if left:
+            if not getattr(self, "_del_timer", None):
+                self._del_timer = QtCore.QTimer(self)
+                self._del_timer.setInterval(10000)
+                self._del_timer.timeout.connect(self._retry_deletes)
+            if not self._del_timer.isActive():
+                self._del_timer.start()
+        elif getattr(self, "_del_timer", None):
+            self._del_timer.stop()
 
     def _setup_views(self):
         d = self.data

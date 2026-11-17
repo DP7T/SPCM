@@ -1,9 +1,11 @@
 # Changelog
 
 ## 1.2.17 (in testing)
-- **Stop & discard** now really removes the measurement's folder: if Windows still holds a
-  file that was just written (virus scanner, an Explorer window on the folder), it tries
-  again for a few seconds, and tells you if the folder can't be deleted
+- **Stop & discard** now really removes the measurement's folder. If Windows still holds
+  a file in it (virus scanner, cloud sync such as OneDrive, an Explorer window), the
+  folder is remembered and deleted in the background as soon as Windows lets go - every
+  10 s, and again at the next start - instead of a "could not delete" message. What held
+  it is written to spcm_error.log
 - A measurement stopped (or failed) **before anything was measured** - e.g. while the
   laser power was still being set - no longer leaves a folder behind (map, line, point
   sweep, I–V). The status bar says that nothing was saved

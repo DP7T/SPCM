@@ -1039,6 +1039,19 @@ if HAVE_QT:
         pump(1.0)
         assert not os.path.exists(os.path.dirname(p_disc)), "folder left after Stop & discard"
         print("      Stop & discard: folder deleted")
+        # a folder Windows still holds (a file open elsewhere): deleted later by itself
+        held_dir = os.path.join(OUT, "selftest_held")
+        os.makedirs(held_dir, exist_ok=True)
+        held = open(os.path.join(held_dir, "selftest_held.h5"), "w")
+        w._delete_scan_files(os.path.join(held_dir, "selftest_held.h5"))
+        if os.name == "nt":                       # Windows refuses while the file is open
+            assert os.path.exists(held_dir) and held_dir in w._pending_deletes(), \
+                "held folder not remembered"
+        held.close()
+        w._retry_deletes()
+        assert not os.path.exists(held_dir) and not w._pending_deletes(), \
+            "held folder not deleted once released"
+        print("      discarded folder that Windows held: deleted once released")
         # stopped before anything was measured: no folder is left behind
         w.side_tabs.setCurrentIndex(2)
         w.sw_kind.setCurrentIndex(w.sw_kind.findData("power"))
