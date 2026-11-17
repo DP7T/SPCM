@@ -154,7 +154,7 @@ It needs the libraries from `requirements.txt`; without PyQt5 it skips the windo
 
 ## Status and branches
 
-- `main`: **1.2.16** (made stable 2026-10-25 at the user's request: "nothing left to do", the user stopped adding features and now only wants things easier to use). Before: 1.2.3 (2026-10-19), 1.0.0. Older releases were deleted by the user; the tags remain.
+- `main`: **1.2.17** (published as stable by the user 2026-10-27; 1.2.16 made stable 2026-10-25 at the user's request: "nothing left to do" - the user stopped adding features and now only wants things easier to use). Before: 1.2.3, 1.0.0. Older releases were deleted by the user; the tags remain.
 - `dev`: where new work happens; becomes one commit "SPCM x.y.z" on `main` once tested on the microscope.
 - `next`: the old 1.1.x test line, fully contained in 1.2.3; no longer used.
 - `experimental-0.10`: the old experimental line (0.10.0). Its useful features were rebuilt on 1.x in 1.2; don't merge it.
