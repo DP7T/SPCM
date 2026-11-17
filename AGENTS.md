@@ -124,6 +124,7 @@ the real hardware and report back with screenshots. Write in plain language for 
 - Per-map file names must be unique within a series (repeated values get `_2`).
 - `map_info` lists/dicts are saved as `json:` attributes.
 - All autosaves (maps, sweeps, I–V) go through `scanner.autosave`.
+- A run that ends with no data (stopped / failed before the first point) leaves no folder (`MainWindow._drop_if_empty`, the `on_*_failed` handlers; 1.2.17, user's report).
 
 ## How to test without hardware
 
