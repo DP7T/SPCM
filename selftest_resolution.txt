@@ -1,0 +1,11 @@
+Resolution from a reflection edge
+
+FWHM          473.7 nm
+10-90 % width 515.6 nm
+sigma         201.2 nm
+test: synthetic edge, sigma 200 nm
+
+Fit: R(x) = A + B·erf((x − x0)/(√2·σ)); FWHM = 2.355σ, 10–90 % = 2.563σ
+A = 0.0499981 V, B = 0.0200007 V, x0 = 2.1360 µm, rms residual 5.2e-05 V, 342 points
+
+CSV columns (numbers only): distance along the line (µm), reflection (V), fit (V)
