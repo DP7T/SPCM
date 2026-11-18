@@ -1113,6 +1113,8 @@ class MainWindow(QtWidgets.QMainWindow):
                     w_.textChanged.connect(lambda *_: self._name_soon.start())
         QtCore.QTimer.singleShot(400, self._name_changed)
         QtCore.QTimer.singleShot(300, self._start_here_on_launch)
+        self.angle.valueChanged.connect(self._update_pol)   # polarization from the angle
+        self._update_pol()
         QtCore.QTimer.singleShot(2000, self._retry_deletes)   # discarded earlier, still there
         self._init_preview()
         dark = bool((self.config.get("ui", {}) or {}).get("dark", False))
@@ -1457,6 +1459,40 @@ class MainWindow(QtWidgets.QMainWindow):
         row.addWidget(rem)
         row.addStretch(1)
         lay.addLayout(row)
+        # polarization from the scan angle (sample rotated, laser polarization fixed)
+        pc = self.config.get("polarization", {}) or {}
+        prow = QtWidgets.QHBoxLayout()
+        self.pol_auto = QtWidgets.QCheckBox("Polarization from the scan angle; laser at")
+        self.pol_auto.setChecked(bool(pc.get("auto", False)))
+        self.pol_lab = QtWidgets.QDoubleSpinBox()
+        self.pol_lab.setRange(-180, 180)
+        self.pol_lab.setDecimals(1)
+        self.pol_lab.setSuffix(" °")
+        self.pol_lab.setValue(float(pc.get("lab_deg", 90.0)))
+        self.pol_lab.setKeyboardTracking(False)
+        prow.addWidget(self.pol_auto)
+        prow.addWidget(self.pol_lab)
+        prow.addStretch(1)
+        prow.addWidget(self._help_btn(
+            "Polarization from the scan angle",
+            "For measuring with a FIXED laser polarization and a ROTATED sample.\n\n"
+            "• Draw the scan frame along the same sample feature every time (e.g. a flake "
+            "edge or the channel), so the Map tab's Angle is the sample's rotation.\n"
+            "• 'laser at' = the direction of the laser polarization in the map's axes, in "
+            "degrees counter-clockwise from the map's x axis (90° = vertical on the map). "
+            "Check it once with something of known polarization response.\n"
+            "• The Polarization row is then filled in by itself: laser angle − scan angle, "
+            "between 0° and 180° (polarization relative to the sample feature). It is "
+            "saved with every map, line and point sweep, and can go into the file name "
+            "with {Polarization} in a tab's 'Add at the end' box.\n"
+            "• Line scans and point sweeps use the Map tab's Angle too (the sample's "
+            "rotation), not the direction of the line."))
+        lay.addLayout(prow)
+        self.pol_auto.toggled.connect(lambda on: (self._save_setting("polarization", "auto",
+                                                                     bool(on)),
+                                                  self._update_pol()))
+        self.pol_lab.valueChanged.connect(lambda v: (self._save_setting(
+            "polarization", "lab_deg", float(v)), self._update_pol()))
         lay.addWidget(QtWidgets.QLabel("Notes"))
         self.exp_notes = QtWidgets.QPlainTextEdit(exp.get("notes", ""))
         self.exp_notes.setPlaceholderText("Anything else: what you are testing, "
@@ -1481,7 +1517,44 @@ class MainWindow(QtWidgets.QMainWindow):
         return out
 
     def conditions(self):
-        return {k: v for k, v in self.experiment_fields()}
+        c = {k: v for k, v in self.experiment_fields()}
+        if getattr(self, "pol_auto", None) is not None and self.pol_auto.isChecked():
+            c["Polarization rule"] = (f"laser at {self.pol_lab.value():g}° minus scan angle "
+                                      f"{self.angle.value():g}° (map axes, counter-clockwise)")
+        return c
+
+    def pol_relative(self):
+        """Polarization relative to the sample feature the frame follows: laser angle −
+        scan angle, in [0°, 180°) (a polarization repeats every 180°)."""
+        return round((self.pol_lab.value() - self.angle.value()) % 180.0, 1) % 180.0
+
+    def _update_pol(self, *_):
+        """Fill the Polarization row from the scan angle (when that is switched on)."""
+        if getattr(self, "pol_auto", None) is None or not hasattr(self, "exp_table"):
+            return
+        on = self.pol_auto.isChecked()
+        self.pol_lab.setEnabled(on)
+        row = None
+        for r in range(self.exp_table.rowCount()):
+            k = self.exp_table.item(r, 0)
+            if k and k.text().strip().lower().startswith("polari"):
+                row = r
+                break
+        if row is None:
+            if not on:
+                return
+            self._add_field("Polarization", "")
+            row = self.exp_table.rowCount() - 1
+        it = self.exp_table.item(row, 1)
+        flags = it.flags()
+        if on:
+            it.setText(f"{self.pol_relative():g}°")
+            it.setFlags(flags & ~QtCore.Qt.ItemFlag.ItemIsEditable)
+            it.setToolTip("Filled in from the scan angle (laser angle − scan angle). "
+                          "Untick 'Polarization from the scan angle' to type it yourself.")
+        else:
+            it.setFlags(flags | QtCore.Qt.ItemFlag.ItemIsEditable)
+            it.setToolTip("")
 
     def remember_experiment(self):
         exp = {"fields": self.experiment_fields(), "notes": self.exp_notes.toPlainText()}

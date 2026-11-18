@@ -830,6 +830,22 @@ if HAVE_QT:
         w.ser_kind.setCurrentIndex(0)
         w.ser_vals.setText("")
         w.amp_mode.setCurrentIndex(amp0)
+        # polarization from the scan angle (laser fixed, sample rotated)
+        w.pol_lab.setValue(90.0)
+        w.pol_auto.setChecked(True)
+        w.angle.setValue(20.0)
+        pol = dict(w.experiment_fields()).get("Polarization")
+        assert pol == "70°", pol
+        w.angle.setValue(-30.0)
+        assert dict(w.experiment_fields()).get("Polarization") == "120°"
+        assert "Polarization rule" in w.conditions()
+        w.name_extra["map"].setText("{Polarization}")
+        nmp, _ = w._make_name("map", w.settings())
+        assert nmp.endswith("_120deg"), nmp
+        print(f"      polarization from the scan angle: angle -30° -> {nmp[-10:]}")
+        w.name_extra["map"].setText("")
+        w.pol_auto.setChecked(False)
+        w.angle.setValue(0.0)
         w.name_extra["map"].setText("{Temperature}")
         w.name_extra["map"].setText("")
         # fine map across an electrode edge, then "Measure resolution"

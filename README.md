@@ -121,6 +121,19 @@ The left side has two tabs:
 - Double-click a map to park the laser on that spot, for example before a point sweep or a quick I–V.
 - If the photocurrent lock-in overloads, a warning appears in the status bar.
 
+## Polarization from the scan angle (fixed laser polarization, rotated sample)
+
+Instead of turning the polarization, you can keep it fixed and rotate the sample. Then:
+1. In the **Experiment notes** tab, tick **Polarization from the scan angle** and set **laser at**:
+   the direction of the laser polarization in the map's axes, in degrees counter-clockwise from x
+   (90° = vertical on the map). Check it once with something of known polarization response.
+2. Draw the scan frame along the **same sample feature** every time (a flake edge, the channel),
+   and press *Scan this frame*, so the Map tab's **Angle** is the sample's rotation.
+3. The **Polarization** row is filled in by itself: laser angle − scan angle, between 0° and 180°
+   (the polarization relative to that feature). It is saved with every measurement (also how it
+   was found), and goes into the file name if you put `{Polarization}` in a tab's
+   *Add at the end* box (e.g. `…_70deg`). Line scans and point sweeps use the Map tab's Angle too.
+
 ## Point sweeps (power, bias, or both) on one spot
 
 1. Park the laser on the spot: double-click a map, double-click the calibrated camera image, or use the joystick.

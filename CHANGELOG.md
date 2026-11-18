@@ -1,6 +1,10 @@
 # Changelog
 
 ## 1.2.18 (in testing)
+- **Polarization from the scan angle** (Experiment notes tab, off by default): for a fixed
+  laser polarization and a rotated sample. The Polarization row is filled in by itself
+  from the scan frame's angle (laser angle − scan angle, 0–180°), saved with every
+  measurement, and available as `{Polarization}` for the file name
 - **Stop & discard:** no more "could not delete the folder" message. If Windows still
   holds a file in the folder (virus scanner, cloud sync such as OneDrive, an Explorer
   window), the folder is remembered and deleted in the background as soon as Windows lets
